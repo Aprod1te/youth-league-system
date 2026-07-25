@@ -42,113 +42,122 @@ export default function DashboardPage() {
   const fetchedRef = useRef(false)
   const supabaseRef = useRef(createClient())
 
+  const loadDashboardData = async () => {
+    const supabase = supabaseRef.current
+
+    try {
+      // 1. Total members count
+      const { count: memberCount } = await supabase
+        .from("profiles")
+        .select("*", { count: "exact", head: true })
+
+      // 2. In-progress tasks count
+      const { count: taskCount } = await supabase
+        .from("tasks")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "in_progress")
+
+      // 3. Monthly activities: created this month
+      const now = new Date()
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+      const { count: activityCount } = await supabase
+        .from("activities")
+        .select("*", { count: "exact", head: true })
+        .gte("created_at", startOfMonth)
+
+      // 4. Completion rate: completed / total tasks
+      const { count: totalTasks } = await supabase
+        .from("tasks")
+        .select("*", { count: "exact", head: true })
+
+      const { count: completedTasks } = await supabase
+        .from("tasks")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "completed")
+
+      const rate = totalTasks && totalTasks > 0
+        ? Math.round((completedTasks || 0) / totalTasks * 100)
+        : 0
+
+      // 5. Pending applications count
+      const { count: pendingAppCount } = await supabase
+        .from("applications")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "pending")
+
+      // 6. Pending activity approvals count
+      const { count: pendingApprovalCount } = await supabase
+        .from("activities")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "pending_approval")
+
+      // 7. Unread notifications for current user
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      const { count: unreadCount } = currentUser
+        ? await supabase
+            .from("notifications")
+            .select("*", { count: "exact", head: true })
+            .eq("user_id", currentUser.id)
+            .eq("is_read", false)
+        : { count: 0 }
+
+      setStats({
+        totalMembers: memberCount ?? 0,
+        inProgressTasks: taskCount ?? 0,
+        monthlyActivities: activityCount ?? 0,
+        completionRate: rate,
+        pendingApplications: pendingAppCount ?? 0,
+        pendingApprovals: pendingApprovalCount ?? 0,
+        unreadNotifications: unreadCount ?? 0,
+      })
+
+      // 8. Recent 3 tasks
+      const { data: recentTaskData } = await supabase
+        .from("tasks")
+        .select("id, title, status, deadline")
+        .order("created_at", { ascending: false })
+        .limit(3)
+
+      setRecentTasks((recentTaskData || []) as Array<{
+        id: string
+        title: string
+        status: string
+        deadline: string | null
+      }>)
+
+      // 9. Recent 3 activities
+      const { data: recentActivityData } = await supabase
+        .from("activities")
+        .select("id, title, status")
+        .order("created_at", { ascending: false })
+        .limit(3)
+
+      setRecentActivities((recentActivityData || []) as Array<{
+        id: string
+        title: string
+        status: string
+      }>)
+    } catch (err) {
+      console.error("Dashboard load error:", err)
+    }
+  }
+
   useEffect(() => {
     if (fetchedRef.current) return
     fetchedRef.current = true
 
-    const supabase = supabaseRef.current
-
-    async function load() {
-      try {
-        // 1. Total members count
-        const { count: memberCount } = await supabase
-          .from("profiles")
-          .select("*", { count: "exact", head: true })
-
-        // 2. In-progress tasks count
-        const { count: taskCount } = await supabase
-          .from("tasks")
-          .select("*", { count: "exact", head: true })
-          .eq("status", "in_progress")
-
-        // 3. Monthly activities: created this month
-        const now = new Date()
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
-        const { count: activityCount } = await supabase
-          .from("activities")
-          .select("*", { count: "exact", head: true })
-          .gte("created_at", startOfMonth)
-
-        // 4. Completion rate: completed / total tasks
-        const { count: totalTasks } = await supabase
-          .from("tasks")
-          .select("*", { count: "exact", head: true })
-
-        const { count: completedTasks } = await supabase
-          .from("tasks")
-          .select("*", { count: "exact", head: true })
-          .eq("status", "completed")
-
-        const rate = totalTasks && totalTasks > 0
-          ? Math.round((completedTasks || 0) / totalTasks * 100)
-          : 0
-
-        // 5. Pending applications count
-        const { count: pendingAppCount } = await supabase
-          .from("applications")
-          .select("*", { count: "exact", head: true })
-          .eq("status", "pending")
-
-        // 6. Pending activity approvals count
-        const { count: pendingApprovalCount } = await supabase
-          .from("activities")
-          .select("*", { count: "exact", head: true })
-          .eq("status", "pending_approval")
-
-        // 7. Unread notifications for current user
-        const { data: { user: currentUser } } = await supabase.auth.getUser()
-        const { count: unreadCount } = currentUser
-          ? await supabase
-              .from("notifications")
-              .select("*", { count: "exact", head: true })
-              .eq("user_id", currentUser.id)
-              .eq("is_read", false)
-          : { count: 0 }
-
-        setStats({
-          totalMembers: memberCount ?? 0,
-          inProgressTasks: taskCount ?? 0,
-          monthlyActivities: activityCount ?? 0,
-          completionRate: rate,
-          pendingApplications: pendingAppCount ?? 0,
-          pendingApprovals: pendingApprovalCount ?? 0,
-          unreadNotifications: unreadCount ?? 0,
-        })
-
-        // 7. Recent 3 tasks
-        const { data: recentTaskData } = await supabase
-          .from("tasks")
-          .select("id, title, status, deadline")
-          .order("created_at", { ascending: false })
-          .limit(3)
-
-        setRecentTasks((recentTaskData || []) as Array<{
-          id: string
-          title: string
-          status: string
-          deadline: string | null
-        }>)
-
-        // 8. Recent 3 activities
-        const { data: recentActivityData } = await supabase
-          .from("activities")
-          .select("id, title, status")
-          .order("created_at", { ascending: false })
-          .limit(3)
-
-        setRecentActivities((recentActivityData || []) as Array<{
-          id: string
-          title: string
-          status: string
-        }>)
-      } catch (err) {
-        console.error("Dashboard load error:", err)
-      } finally {
-        setLoading(false)
-      }
+    const initLoad = async () => {
+      await loadDashboardData()
+      setLoading(false)
     }
 
-    load()
+    initLoad()
+
+    const interval = setInterval(() => {
+      loadDashboardData()
+    }, 10000)
+
+    return () => clearInterval(interval)
   }, [])
 
   const statItems = [

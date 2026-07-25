@@ -61,6 +61,8 @@ export default function ApplicationsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [userRole, setUserRole] = useState<string | null>(null)
+  const [userDeptId, setUserDeptId] = useState<string | null>(null)
 
   // Name maps
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
@@ -87,11 +89,36 @@ export default function ApplicationsPage() {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
         setUser(currentUser)
 
+        // Step 0: Get current user profile for role/department
+        let currentRole: string | null = null
+        let currentDeptId: string | null = null
+        if (currentUser) {
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("role, department_id")
+            .eq("id", currentUser.id)
+            .single()
+
+          if (profileData) {
+            currentRole = profileData.role
+            currentDeptId = profileData.department_id
+          }
+        }
+        setUserRole(currentRole)
+        setUserDeptId(currentDeptId)
+
         // Step 1: Fetch applications
-        const { data: appData, error: appError } = await supabase
+        let appQuery = supabase
           .from("applications")
           .select("*")
           .order("created_at", { ascending: false })
+
+        // If minister, only show applications for their department
+        if (currentRole === "minister" && currentDeptId) {
+          appQuery = appQuery.eq("department_id", currentDeptId)
+        }
+
+        const { data: appData, error: appError } = await appQuery
 
         if (appError) {
           setError(appError.message)

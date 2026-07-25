@@ -102,6 +102,14 @@ export default function DashboardLayout({
     }
     
     getUser()
+
+    const interval = setInterval(() => {
+      supabaseRef.current.auth.getUser().then(({ data: { user: currentUser } }) => {
+        if (currentUser) fetchNotifications(currentUser.id)
+      })
+    }, 5000)
+
+    return () => clearInterval(interval)
   }, [router])
 
   const fetchNotifications = async (userId: string) => {
@@ -241,8 +249,11 @@ export default function DashboardLayout({
 
         {/* 通知铃铛 */}
 <div className="relative">
-  <div
-    onClick={() => setNotifDropdownOpen(!notifDropdownOpen)}
+          <div
+            onClick={async () => {
+              if (user) await fetchNotifications(user.id)
+              setNotifDropdownOpen(!notifDropdownOpen)
+            }}
     className="relative inline-flex items-center justify-center rounded-full size-9 hover:bg-accent hover:text-accent-foreground cursor-pointer"
     role="button"
     aria-label="通知"

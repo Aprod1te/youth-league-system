@@ -86,6 +86,7 @@ export default function ActivitiesPage() {
   const [summaryDialogOpen, setSummaryDialogOpen] = useState(false)
   const [summaryTargetId, setSummaryTargetId] = useState<string | null>(null)
   const [summaryContent, setSummaryContent] = useState("")
+  const [summaryParticipantCount, setSummaryParticipantCount] = useState("")
   const [summarySubmitting, setSummarySubmitting] = useState(false)
 
   const didFetch = useRef(false)
@@ -222,6 +223,7 @@ export default function ActivitiesPage() {
   const openSummaryDialog = (activityId: string) => {
     setSummaryTargetId(activityId)
     setSummaryContent("")
+    setSummaryParticipantCount("")
     setSummaryDialogOpen(true)
   }
 
@@ -231,12 +233,13 @@ export default function ActivitiesPage() {
     setSummarySubmitting(true)
     const supabase = supabaseRef.current
 
-    // Insert into activity_reports table (not activities)
+    // Insert into activity_reports table
     const { error: insertError } = await supabase
       .from("activity_reports")
       .insert({
         activity_id: summaryTargetId,
         summary: summaryContent.trim(),
+        participant_count: parseInt(summaryParticipantCount) || 0,
         submitted_by: user.id,
       })
 
@@ -250,37 +253,20 @@ export default function ActivitiesPage() {
       return
     }
 
-    // Also mark activity as completed
-    const { error: updateError } = await supabase
-      .from("activities")
-      .update({ status: "completed" })
-      .eq("id", summaryTargetId)
-
-    if (updateError) {
-      toast.add({
-        type: "error",
-        title: "更新状态失败",
-        description: updateError.message,
-      })
-    }
-
     toast.add({
       type: "success",
-      title: "上传成功",
+      title: "总结上传成功",
       description: "活动总结已保存",
     })
 
-    setActivities((prev) =>
-      prev.map((a) =>
-        a.id === summaryTargetId
-          ? { ...a, status: "completed" }
-          : a
-      )
-    )
     setSummaryDialogOpen(false)
     setSummaryTargetId(null)
     setSummaryContent("")
+    setSummaryParticipantCount("")
     setSummarySubmitting(false)
+
+    // Refresh list
+    await loadActivities()
   }
 
   const handleCreateActivity = async () => {
@@ -446,7 +432,7 @@ export default function ActivitiesPage() {
                           标记完成
                         </Button>
                       )}
-                      {(activity.status === "approved" || activity.status === "completed") && (
+                      {activity.status === "completed" && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -590,6 +576,17 @@ export default function ActivitiesPage() {
                 value={summaryContent}
                 onChange={(e) => setSummaryContent(e.target.value)}
                 rows={6}
+                disabled={summarySubmitting}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="participant_count">参与人数</Label>
+              <Input
+                id="participant_count"
+                type="number"
+                placeholder="0"
+                value={summaryParticipantCount}
+                onChange={(e) => setSummaryParticipantCount(e.target.value)}
                 disabled={summarySubmitting}
               />
             </div>

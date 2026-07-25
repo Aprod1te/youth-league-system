@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { toast } from "@/components/ui/toast"
@@ -70,6 +71,7 @@ export default function ActivityDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<SupabaseUser | null>(null)
   const [summary, setSummary] = useState("")
+  const [participantCount, setParticipantCount] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
   const didFetch = useRef(false)
@@ -143,6 +145,7 @@ export default function ActivityDetailPage() {
     const { error: submitError } = await supabase.from("activity_reports").insert({
       activity_id: activity.id,
       summary: summary.trim(),
+      participant_count: parseInt(participantCount) || 0,
       submitted_by: user.id,
     })
 
@@ -283,10 +286,17 @@ export default function ActivityDetailPage() {
                 <CardTitle>活动总结</CardTitle>
                 <CardDescription>已提交的活动总结报告</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
                 <div className="rounded-lg border bg-muted/20 p-4">
                   <p className="text-sm whitespace-pre-wrap">{activityReport!.summary}</p>
                 </div>
+                {activityReport!.participant_count != null && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <Users className="size-4 text-muted-foreground" />
+                    <span className="text-muted-foreground">参与人数：</span>
+                    <span>{activityReport!.participant_count} 人</span>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -309,6 +319,17 @@ export default function ActivityDetailPage() {
                     value={summary}
                     onChange={(e) => setSummary(e.target.value)}
                     rows={5}
+                    disabled={submitting}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="participant_count">参与人数</Label>
+                  <Input
+                    id="participant_count"
+                    type="number"
+                    placeholder="0"
+                    value={participantCount}
+                    onChange={(e) => setParticipantCount(e.target.value)}
                     disabled={submitting}
                   />
                 </div>

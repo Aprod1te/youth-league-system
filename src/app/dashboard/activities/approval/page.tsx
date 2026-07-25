@@ -50,6 +50,7 @@ export default function ActivityApprovalPage() {
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<SupabaseUser | null>(null)
   const [userRole, setUserRole] = useState<string | null>(null)
+  const [userDeptId, setUserDeptId] = useState<string | null>(null)
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
 
   // Reject dialog
@@ -72,30 +73,43 @@ export default function ActivityApprovalPage() {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
         setUser(currentUser)
 
-        // Check user role - only admin and secretary can approve
+        // Check user role and get department
+        let currentRole: string | null = null
+        let currentDeptId: string | null = null
         if (currentUser) {
           const { data: profileData } = await supabase
             .from("profiles")
-            .select("role")
+            .select("role, department_id")
             .eq("id", currentUser.id)
             .single()
 
-          const role = (profileData as { role: string } | null)?.role || null
-          setUserRole(role)
+          if (profileData) {
+            currentRole = (profileData as { role: string }).role
+            currentDeptId = (profileData as { department_id: string | null }).department_id
+          }
+          setUserRole(currentRole)
+          setUserDeptId(currentDeptId)
 
-          if (role !== "admin" && role !== "secretary") {
-            setError("您没有审批权限，只有管理员和团委书记可以审批活动")
+          if (currentRole !== "admin" && currentRole !== "secretary" && currentRole !== "minister") {
+            setError("您没有审批权限")
             setLoading(false)
             return
           }
         }
 
         // Step 1: Fetch activities with status pending_approval
-        const { data: activityData, error: activityError } = await supabase
+        let activityQuery = supabase
           .from("activities")
           .select("*")
           .eq("status", "pending_approval")
           .order("created_at", { ascending: false })
+
+        // If minister, only show activities for their department
+        if (currentRole === "minister" && currentDeptId) {
+          activityQuery = activityQuery.eq("department_id", currentDeptId)
+        }
+
+        const { data: activityData, error: activityError } = await activityQuery
 
         if (activityError) {
           setError(activityError.message)
@@ -151,7 +165,7 @@ export default function ActivityApprovalPage() {
       const { error: notifError } = await supabase.from("notifications").insert({
         user_id: targetActivity.organizer_id,
         title: "活动审批通过",
-        content: `你申请的活动「${targetActivity.title}」已通过审批`,
+        content: `你的活动"${targetActivity.title}"已通过审批`,
         type: "activity",
         related_id: activityId,
         is_read: false,
@@ -206,11 +220,10 @@ export default function ActivityApprovalPage() {
     const targetActivity = activities.find((a) => a.id === rejectTargetId)
     if (targetActivity) {
       console.log("正在创建通知给用户:", targetActivity.organizer_id)
-      const reasonText = rejectNote.trim() ? `原因：${rejectNote.trim()}` : ""
       const { error: notifError } = await supabase.from("notifications").insert({
         user_id: targetActivity.organizer_id,
         title: "活动审批未通过",
-        content: `你申请的活动「${targetActivity.title}」未通过审批。${reasonText}`,
+        content: `你的活动"${targetActivity.title}"未通过审批，原因：${rejectNote.trim() || "不符合要求"}`,
         type: "activity",
         related_id: rejectTargetId,
         is_read: false,
