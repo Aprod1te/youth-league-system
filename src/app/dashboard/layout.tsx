@@ -33,6 +33,8 @@ const navigation = [
   { name: "人员管理", href: "/dashboard/members", icon: Users },
   { name: "任务管理", href: "/dashboard/tasks", icon: ClipboardList },
   { name: "活动管理", href: "/dashboard/activities", icon: Calendar },
+  { name: "活动审批", href: "/dashboard/activities/approval", icon: Calendar },
+  { name: "入部审核", href: "/dashboard/applications", icon: ClipboardList },
 ]
 
 export default function DashboardLayout({

@@ -22,7 +22,10 @@ export default function DepartmentsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<User | null>(null)
-  const [appliedDeptIds, setAppliedDeptIds] = useState<Set<string>>(new Set())
+  // userDepartmentId: the department_id from profiles (most accurate — set after approval)
+  const [userDepartmentId, setUserDepartmentId] = useState<string | null>(null)
+  // applicationStatusMap: department_id -> application status (pending/approved/rejected)
+  const [applicationStatusMap, setApplicationStatusMap] = useState<Record<string, string>>({})
   const [selectedDept, setSelectedDept] = useState<Department | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [reason, setReason] = useState("")
@@ -52,19 +55,37 @@ export default function DepartmentsPage() {
           return
         }
 
-        setDepartments((prev) => {
-  const newDepts = (deptData || []) as Department[]
-  return prev.length === 0 ? newDepts : prev
-})
+        const newDepts = (deptData || []) as Department[]
+        setDepartments(newDepts)
 
         if (currentUser) {
+          // 1) Fetch user's current department_id from profiles (most accurate)
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("department_id")
+            .eq("id", currentUser.id)
+            .maybeSingle()
+
+          if (profileData?.department_id) {
+            setUserDepartmentId(profileData.department_id)
+          }
+
+          // 2) Fetch all applications for this user to determine per-department status
           const { data: appData } = await supabase
             .from("applications")
-            .select("department_id")
+            .select("department_id, status")
             .eq("user_id", currentUser.id)
 
-          if (appData) {
-            setAppliedDeptIds(new Set(appData.map((a) => a.department_id)))
+          if (appData && appData.length > 0) {
+            const map: Record<string, string> = {}
+            for (const app of appData) {
+              // Keep the most recent/approved status per department
+              const existing = map[app.department_id]
+              if (!existing || app.status === "approved") {
+                map[app.department_id] = app.status
+              }
+            }
+            setApplicationStatusMap(map)
           }
         }
       } catch (err) {
@@ -102,7 +123,7 @@ export default function DepartmentsPage() {
         description: error.message,
       })
     } else {
-      setAppliedDeptIds((prev) => new Set([...prev, selectedDept.id]))
+      setApplicationStatusMap((prev) => ({ ...prev, [selectedDept.id]: "pending" }))
       toast.add({
         type: "success",
         title: "申请成功",
@@ -113,7 +134,21 @@ export default function DepartmentsPage() {
     setSubmitting(false)
   }
 
-  const isApplied = (deptId: string) => appliedDeptIds.has(deptId)
+  const getButtonState = (deptId: string): { label: string; disabled: boolean; onClick: (() => void) | undefined } => {
+    // Priority 1: profiles.department_id matches → already a member
+    if (userDepartmentId === deptId) {
+      return { label: "已加入", disabled: true, onClick: undefined }
+    }
+
+    // Priority 2: Check application status for this department
+    const appStatus = applicationStatusMap[deptId]
+    if (appStatus === "pending") {
+      return { label: "审核中", disabled: true, onClick: undefined }
+    }
+
+    // Priority 3: No application or rejected → can apply
+    return { label: "申请加入", disabled: false, onClick: () => handleApply(departments.find((d) => d.id === deptId)!) }
+  }
 
   // De-duplicate by id — ensures each department renders only once
   const uniqueDepartments = Array.from(
@@ -142,38 +177,36 @@ export default function DepartmentsPage() {
         </Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {uniqueDepartments.map((dept) => (
-            <Card key={dept.id} className="hover:shadow-md transition-shadow flex flex-col">
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10">
-                    <Building2 className="size-5 text-primary" />
+          {uniqueDepartments.map((dept) => {
+            const { label, disabled, onClick } = getButtonState(dept.id)
+            return (
+              <Card key={dept.id} className="hover:shadow-md transition-shadow flex flex-col">
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10">
+                      <Building2 className="size-5 text-primary" />
+                    </div>
+                    <CardTitle className="text-lg">{dept.name}</CardTitle>
                   </div>
-                  <CardTitle className="text-lg">{dept.name}</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="flex-1">
-                <CardDescription>
-                  {dept.description || "暂无描述"}
-                </CardDescription>
-              </CardContent>
-              <CardFooter>
-                {isApplied(dept.id) ? (
-                  <Button variant="outline" className="w-full" disabled>
-                    审核中
-                  </Button>
-                ) : (
+                </CardHeader>
+                <CardContent className="flex-1">
+                  <CardDescription>
+                    {dept.description || "暂无描述"}
+                  </CardDescription>
+                </CardContent>
+                <CardFooter>
                   <Button
                     variant="outline"
                     className="w-full"
-                    onClick={() => handleApply(dept)}
+                    disabled={disabled}
+                    onClick={onClick}
                   >
-                    申请加入
+                    {label}
                   </Button>
-                )}
-              </CardFooter>
-            </Card>
-          ))}
+                </CardFooter>
+              </Card>
+            )
+          })}
         </div>
       )}
 

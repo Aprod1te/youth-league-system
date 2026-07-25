@@ -1,15 +1,19 @@
 "use client"
 
 import { useEffect, useState, useRef } from "react"
+import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Users, ClipboardList, Calendar, TrendingUp } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Users, ClipboardList, Calendar, TrendingUp, Bell, Clock } from "lucide-react"
 
 interface DashboardStats {
   totalMembers: number
   inProgressTasks: number
   monthlyActivities: number
   completionRate: number
+  pendingApplications: number
+  pendingApprovals: number
 }
 
 export default function DashboardPage() {
@@ -18,6 +22,8 @@ export default function DashboardPage() {
     inProgressTasks: 0,
     monthlyActivities: 0,
     completionRate: 0,
+    pendingApplications: 0,
+    pendingApprovals: 0,
   })
   const [loading, setLoading] = useState(true)
   const [recentTasks, setRecentTasks] = useState<Array<{
@@ -75,14 +81,28 @@ export default function DashboardPage() {
           ? Math.round((completedTasks || 0) / totalTasks * 100)
           : 0
 
+        // 5. Pending applications count
+        const { count: pendingAppCount } = await supabase
+          .from("applications")
+          .select("*", { count: "exact", head: true })
+          .eq("status", "pending")
+
+        // 6. Pending activity approvals count
+        const { count: pendingApprovalCount } = await supabase
+          .from("activities")
+          .select("*", { count: "exact", head: true })
+          .eq("status", "pending_approval")
+
         setStats({
           totalMembers: memberCount ?? 0,
           inProgressTasks: taskCount ?? 0,
           monthlyActivities: activityCount ?? 0,
           completionRate: rate,
+          pendingApplications: pendingAppCount ?? 0,
+          pendingApprovals: pendingApprovalCount ?? 0,
         })
 
-        // 5. Recent 3 tasks
+        // 7. Recent 3 tasks
         const { data: recentTaskData } = await supabase
           .from("tasks")
           .select("id, title, status, deadline")
@@ -96,7 +116,7 @@ export default function DashboardPage() {
           deadline: string | null
         }>)
 
-        // 6. Recent 3 activities
+        // 8. Recent 3 activities
         const { data: recentActivityData } = await supabase
           .from("activities")
           .select("id, title, status")
@@ -108,8 +128,8 @@ export default function DashboardPage() {
           title: string
           status: string
         }>)
-      } catch {
-        // Silently handle errors, stats will show 0
+      } catch (err) {
+        console.error("Dashboard load error:", err)
       } finally {
         setLoading(false)
       }
@@ -173,6 +193,66 @@ export default function DashboardPage() {
         ))}
       </div>
 
+      {/* 待办事项 */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card className="border-orange-200 bg-orange-50/50">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Bell className="size-4 text-orange-500" />
+              入部待审核
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {stats.pendingApplications === 0 ? (
+              <p className="text-sm text-muted-foreground">暂无待审核的入部申请</p>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Clock className="size-4 text-orange-500" />
+                  <p className="text-sm">
+                    有 <span className="font-bold text-orange-600">{stats.pendingApplications}</span> 条入部申请等待审核
+                  </p>
+                </div>
+                <Link href="/dashboard/applications">
+                  <Badge className="cursor-pointer bg-orange-500 hover:bg-orange-600">
+                    前往处理
+                  </Badge>
+                </Link>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-blue-200 bg-blue-50/50">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Bell className="size-4 text-blue-500" />
+              活动待审批
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {stats.pendingApprovals === 0 ? (
+              <p className="text-sm text-muted-foreground">暂无待审批的活动</p>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Clock className="size-4 text-blue-500" />
+                  <p className="text-sm">
+                    有 <span className="font-bold text-blue-600">{stats.pendingApprovals}</span> 条活动等待审批
+                  </p>
+                </div>
+                <Link href="/dashboard/activities/approval">
+                  <Badge className="cursor-pointer bg-blue-500 hover:bg-blue-600">
+                    前往处理
+                  </Badge>
+                </Link>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 最近动态 */}
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
@@ -247,20 +327,26 @@ export default function DashboardPage() {
                       className={`ml-3 shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
                         a.status === "completed"
                           ? "bg-green-100 text-green-700"
-                          : a.status === "in_progress"
+                          : a.status === "approved"
                           ? "bg-blue-100 text-blue-700"
-                          : a.status === "cancelled"
+                          : a.status === "rejected" || a.status === "cancelled"
                           ? "bg-red-100 text-red-700"
+                          : a.status === "pending_approval"
+                          ? "bg-yellow-100 text-yellow-700"
                           : "bg-gray-100 text-gray-700"
                       }`}
                     >
-                      {a.status === "pending"
-                        ? "待处理"
-                        : a.status === "in_progress"
-                        ? "进行中"
+                      {a.status === "draft"
+                        ? "草稿"
+                        : a.status === "pending_approval"
+                        ? "待审批"
+                        : a.status === "approved"
+                        ? "已批准"
+                        : a.status === "rejected"
+                        ? "已拒绝"
                         : a.status === "completed"
                         ? "已完成"
-                        : "已取消"}
+                        : a.status}
                     </span>
                   </div>
                 ))}

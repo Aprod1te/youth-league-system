@@ -80,6 +80,7 @@ export default function ActivitiesPage() {
   const [newBudget, setNewBudget] = useState("")
   const [newMaxParticipants, setNewMaxParticipants] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [actionLoading, setActionLoading] = useState(false)
 
   const didFetch = useRef(false)
   const supabaseRef = useRef(createClient())
@@ -146,6 +147,39 @@ export default function ActivitiesPage() {
 
   const getOrganizerName = (userId: string) => {
     return userNameMap[userId] || userId
+  }
+
+  const handleSubmitForApproval = async (activityId: string) => {
+    setActionLoading(true)
+    const supabase = supabaseRef.current
+
+    const { data: updatedData, error: updateError } = await supabase
+      .from("activities")
+      .update({ status: "pending_approval" })
+      .eq("id", activityId)
+      .select()
+
+    if (updateError) {
+      console.error("Submit for approval error:", updateError)
+      toast.add({
+        type: "error",
+        title: "提交失败",
+        description: updateError.message,
+      })
+      setActionLoading(false)
+      return
+    }
+
+    toast.add({
+      type: "success",
+      title: "提交成功",
+      description: "活动已提交审批",
+    })
+
+    setActivities((prev) =>
+      prev.map((a) => (a.id === activityId ? { ...a, status: "pending_approval" } : a))
+    )
+    setActionLoading(false)
   }
 
   const handleCreateActivity = async () => {
@@ -252,6 +286,7 @@ export default function ActivitiesPage() {
                 <TableHead>开始时间</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead>组织者</TableHead>
+                <TableHead>操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -283,6 +318,17 @@ export default function ActivitiesPage() {
                     </Badge>
                   </TableCell>
                   <TableCell>{getOrganizerName(activity.organizer_id)}</TableCell>
+                  <TableCell>
+                    {activity.status === "draft" && (
+                      <Button
+                        size="sm"
+                        onClick={() => handleSubmitForApproval(activity.id)}
+                        disabled={actionLoading}
+                      >
+                        提交审批
+                      </Button>
+                    )}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

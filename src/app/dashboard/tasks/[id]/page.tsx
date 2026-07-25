@@ -67,6 +67,15 @@ export default function TaskDetailPage() {
   const [feedback, setFeedback] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
+  const [submissions, setSubmissions] = useState<Array<{
+    id: string
+    task_id: string
+    user_id: string
+    content: string
+    status: string
+    feedback: string | null
+    created_at: string
+  }>>([])
   const didFetch = useRef(false)
   const supabaseRef = useRef(createClient())
 
@@ -128,6 +137,7 @@ export default function TaskDetailPage() {
       task_id: task.id,
       user_id: user.id,
       content: feedback.trim(),
+      status: "submitted",
     })
 
     if (submitError) {
@@ -164,11 +174,29 @@ export default function TaskDetailPage() {
 
     // Update local state
     setTask({ ...task, status: "completed" })
+
+    // Refresh submissions
+    const { data: freshSubmissions } = await supabase
+      .from("task_submissions")
+      .select("*")
+      .eq("task_id", task.id)
+      .order("created_at", { ascending: false })
+
+    setSubmissions((freshSubmissions || []) as Array<{
+      id: string
+      task_id: string
+      user_id: string
+      content: string
+      status: string
+      feedback: string | null
+      created_at: string
+    }>)
+
     setFeedback("")
     setSubmitting(false)
   }
 
-  const canSubmit = task && !["completed", "cancelled"].includes(task.status)
+  const canSubmit = task && ["pending", "in_progress"].includes(task.status)
 
   const getCreatorName = (userId: string) => userNameMap[userId] || userId
   const getAssignName = (userId: string | null) => {
@@ -273,6 +301,47 @@ export default function TaskDetailPage() {
                 >
                   {submitting ? "提交中..." : "提交反馈"}
                 </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Submission History */}
+          {submissions.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>提交记录</CardTitle>
+                <CardDescription>
+                  共 {submissions.length} 条提交记录
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {submissions.map((sub) => (
+                  <div key={sub.id} className="rounded-lg border p-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(sub.created_at).toLocaleDateString("zh-CN", {
+                          year: "numeric",
+                          month: "2-digit",
+                          day: "2-digit",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        sub.status === "submitted" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"
+                      }`}>
+                        {sub.status === "submitted" ? "已提交" : sub.status}
+                      </span>
+                    </div>
+                    <p className="text-sm whitespace-pre-wrap">{sub.content}</p>
+                    {sub.feedback && (
+                      <div className="mt-2 pt-2 border-t">
+                        <span className="text-xs text-muted-foreground">审核反馈：</span>
+                        <p className="text-sm mt-1">{sub.feedback}</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </CardContent>
             </Card>
           )}
