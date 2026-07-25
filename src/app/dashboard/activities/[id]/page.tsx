@@ -24,6 +24,7 @@ interface ActivityDetail {
   department_id: string | null
   status: string
   max_participants: number | null
+  summary: string | null
   created_at: string
 }
 
@@ -147,6 +148,7 @@ export default function ActivityDetailPage() {
   }
 
   const showSummarySection = activity && activity.status === "completed"
+  const hasSummary = activity?.summary && activity.summary.trim().length > 0
 
   return (
     <div className="space-y-6">
@@ -251,8 +253,23 @@ export default function ActivityDetailPage() {
             </CardContent>
           </Card>
 
-          {/* Activity Summary / Report Section */}
-          {showSummarySection && (
+          {/* Activity Summary Section */}
+          {hasSummary && (
+            <Card>
+              <CardHeader>
+                <CardTitle>活动总结</CardTitle>
+                <CardDescription>已提交的活动总结报告</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-lg border bg-muted/20 p-4">
+                  <p className="text-sm whitespace-pre-wrap">{activity.summary}</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Activity Summary Input / Report Section */}
+          {showSummarySection && !hasSummary && (
             <Card>
               <CardHeader>
                 <CardTitle>上传活动总结</CardTitle>

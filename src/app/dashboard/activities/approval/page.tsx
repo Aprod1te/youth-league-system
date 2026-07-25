@@ -49,6 +49,7 @@ export default function ActivityApprovalPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [userRole, setUserRole] = useState<string | null>(null)
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
 
   // Reject dialog
@@ -71,6 +72,24 @@ export default function ActivityApprovalPage() {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
         setUser(currentUser)
 
+        // Check user role - only admin and secretary can approve
+        if (currentUser) {
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", currentUser.id)
+            .single()
+
+          const role = (profileData as { role: string } | null)?.role || null
+          setUserRole(role)
+
+          if (role !== "admin" && role !== "secretary") {
+            setError("您没有审批权限，只有管理员和团委书记可以审批活动")
+            setLoading(false)
+            return
+          }
+        }
+
         // Step 1: Fetch activities with status pending_approval
         const { data: activityData, error: activityError } = await supabase
           .from("activities")
@@ -85,7 +104,7 @@ export default function ActivityApprovalPage() {
 
         setActivities((activityData || []) as Activity[])
 
-        // Step 2: Fetch profiles
+        // Step 2: Fetch profiles for name map
         const { data: profileData } = await supabase
           .from("profiles")
           .select("id, full_name")
@@ -123,6 +142,19 @@ export default function ActivityApprovalPage() {
       })
       setActionLoading(false)
       return
+    }
+
+    // Create notification for the organizer
+    const targetActivity = activities.find((a) => a.id === activityId)
+    if (targetActivity) {
+      await supabase.from("notifications").insert({
+        user_id: targetActivity.organizer_id,
+        title: "活动审批通过",
+        content: `你申请的活动「${targetActivity.title}」已通过审批`,
+        type: "activity_approved",
+        related_id: activityId,
+        is_read: false,
+      })
     }
 
     toast.add({
@@ -164,6 +196,20 @@ export default function ActivityApprovalPage() {
       })
       setActionLoading(false)
       return
+    }
+
+    // Create notification for the organizer
+    const targetActivity = activities.find((a) => a.id === rejectTargetId)
+    if (targetActivity) {
+      const reasonText = rejectNote.trim() ? `原因：${rejectNote.trim()}` : ""
+      await supabase.from("notifications").insert({
+        user_id: targetActivity.organizer_id,
+        title: "活动审批未通过",
+        content: `你申请的活动「${targetActivity.title}」未通过审批。${reasonText}`,
+        type: "activity_rejected",
+        related_id: rejectTargetId,
+        is_read: false,
+      })
     }
 
     toast.add({

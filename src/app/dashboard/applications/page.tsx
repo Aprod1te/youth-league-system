@@ -183,6 +183,17 @@ export default function ApplicationsPage() {
       return
     }
 
+    // Create notification for the applicant
+    const deptName = deptNameMap[app.department_id] || ""
+    await supabase.from("notifications").insert({
+      user_id: app.user_id,
+      title: "入部申请已通过",
+      content: `你的入部申请已通过，欢迎加入${deptName}`,
+      type: "application_approved",
+      related_id: app.id,
+      is_read: false,
+    })
+
     toast.add({
       type: "success",
       title: "审核通过",
@@ -228,6 +239,20 @@ export default function ApplicationsPage() {
     }
 
     const targetApp = applications.find((a) => a.id === rejectTargetId)
+
+    // Create notification for the applicant
+    if (targetApp) {
+      const deptName = deptNameMap[targetApp.department_id] || ""
+      const reasonText = rejectNote.trim() ? `原因：${rejectNote.trim()}` : ""
+      await supabase.from("notifications").insert({
+        user_id: targetApp.user_id,
+        title: "入部申请未通过",
+        content: `你的入部申请未通过${reasonText}`,
+        type: "application_rejected",
+        related_id: rejectTargetId,
+        is_read: false,
+      })
+    }
 
     toast.add({
       type: "success",

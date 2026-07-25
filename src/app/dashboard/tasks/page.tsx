@@ -194,6 +194,29 @@ export default function TasksPage() {
       return
     }
 
+    // Create notification for the assigned user
+    if (newAssignedTo) {
+      // Fetch the just-created task to get its ID
+      const { data: createdTasks } = await supabase
+        .from("tasks")
+        .select("id")
+        .eq("title", newTitle.trim())
+        .eq("created_by", user.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+
+      const newTaskId = createdTasks && createdTasks.length > 0 ? createdTasks[0].id : null
+
+      await supabase.from("notifications").insert({
+        user_id: newAssignedTo,
+        title: "新任务分配",
+        content: `你有一个新任务：「${newTitle.trim()}」`,
+        type: "task_assigned",
+        related_id: newTaskId,
+        is_read: false,
+      })
+    }
+
     toast.add({
       type: "success",
       title: "创建成功",

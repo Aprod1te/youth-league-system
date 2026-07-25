@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { toast } from "@/components/ui/toast"
-import { Plus } from "lucide-react"
+import { Plus, CheckCircle, FileText } from "lucide-react"
 import type { User } from "@supabase/supabase-js"
 
 interface Activity {
@@ -81,6 +81,12 @@ export default function ActivitiesPage() {
   const [newMaxParticipants, setNewMaxParticipants] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
+
+  // Summary dialog state
+  const [summaryDialogOpen, setSummaryDialogOpen] = useState(false)
+  const [summaryTargetId, setSummaryTargetId] = useState<string | null>(null)
+  const [summaryContent, setSummaryContent] = useState("")
+  const [summarySubmitting, setSummarySubmitting] = useState(false)
 
   const didFetch = useRef(false)
   const supabaseRef = useRef(createClient())
@@ -180,6 +186,86 @@ export default function ActivitiesPage() {
       prev.map((a) => (a.id === activityId ? { ...a, status: "pending_approval" } : a))
     )
     setActionLoading(false)
+  }
+
+  const handleMarkComplete = async (activityId: string) => {
+    setActionLoading(true)
+    const supabase = supabaseRef.current
+
+    const { error: updateError } = await supabase
+      .from("activities")
+      .update({ status: "completed" })
+      .eq("id", activityId)
+
+    if (updateError) {
+      toast.add({
+        type: "error",
+        title: "操作失败",
+        description: updateError.message,
+      })
+      setActionLoading(false)
+      return
+    }
+
+    toast.add({
+      type: "success",
+      title: "已完成",
+      description: "活动已标记为完成",
+    })
+
+    setActivities((prev) =>
+      prev.map((a) => (a.id === activityId ? { ...a, status: "completed" } : a))
+    )
+    setActionLoading(false)
+  }
+
+  const openSummaryDialog = (activityId: string) => {
+    setSummaryTargetId(activityId)
+    setSummaryContent("")
+    setSummaryDialogOpen(true)
+  }
+
+  const handleUploadSummary = async () => {
+    if (!summaryTargetId || !summaryContent.trim()) return
+
+    setSummarySubmitting(true)
+    const supabase = supabaseRef.current
+
+    const { error: updateError } = await supabase
+      .from("activities")
+      .update({
+        summary: summaryContent.trim(),
+        status: "completed",
+      })
+      .eq("id", summaryTargetId)
+
+    if (updateError) {
+      toast.add({
+        type: "error",
+        title: "上传失败",
+        description: updateError.message,
+      })
+      setSummarySubmitting(false)
+      return
+    }
+
+    toast.add({
+      type: "success",
+      title: "上传成功",
+      description: "活动总结已保存",
+    })
+
+    setActivities((prev) =>
+      prev.map((a) =>
+        a.id === summaryTargetId
+          ? { ...a, status: "completed" }
+          : a
+      )
+    )
+    setSummaryDialogOpen(false)
+    setSummaryTargetId(null)
+    setSummaryContent("")
+    setSummarySubmitting(false)
   }
 
   const handleCreateActivity = async () => {
@@ -293,12 +379,17 @@ export default function ActivitiesPage() {
               {filteredActivities.map((activity) => (
                 <TableRow key={activity.id}>
                   <TableCell className="font-medium">
-                    <Link
-                      href={`/dashboard/activities/${activity.id}`}
-                      className="text-primary hover:underline"
-                    >
-                      {activity.title}
-                    </Link>
+                    <div>
+                      <Link
+                        href={`/dashboard/activities/${activity.id}`}
+                        className="text-primary hover:underline"
+                      >
+                        {activity.title}
+                      </Link>
+                      {activity.status === "completed" && (
+                        <p className="text-xs text-muted-foreground mt-1">已完成</p>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>{activity.location || "-"}</TableCell>
                   <TableCell>
@@ -319,15 +410,39 @@ export default function ActivitiesPage() {
                   </TableCell>
                   <TableCell>{getOrganizerName(activity.organizer_id)}</TableCell>
                   <TableCell>
-                    {activity.status === "draft" && (
-                      <Button
-                        size="sm"
-                        onClick={() => handleSubmitForApproval(activity.id)}
-                        disabled={actionLoading}
-                      >
-                        提交审批
-                      </Button>
-                    )}
+                    <div className="flex gap-2">
+                      {activity.status === "draft" && (
+                        <Button
+                          size="sm"
+                          onClick={() => handleSubmitForApproval(activity.id)}
+                          disabled={actionLoading}
+                        >
+                          提交审批
+                        </Button>
+                      )}
+                      {activity.status === "approved" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleMarkComplete(activity.id)}
+                          disabled={actionLoading}
+                        >
+                          <CheckCircle className="mr-1 size-3" />
+                          标记完成
+                        </Button>
+                      )}
+                      {(activity.status === "approved" || activity.status === "completed") && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => openSummaryDialog(activity.id)}
+                          disabled={actionLoading}
+                        >
+                          <FileText className="mr-1 size-3" />
+                          上传总结
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -437,6 +552,46 @@ export default function ActivitiesPage() {
               disabled={submitting || !newTitle.trim()}
             >
               {submitting ? "创建中..." : "创建活动"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Summary Dialog */}
+      <Dialog open={summaryDialogOpen} onOpenChange={setSummaryDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>上传活动总结</DialogTitle>
+            <DialogDescription>
+              请填写本次活动总结，上传后将自动标记活动为已完成
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="summary_content">活动总结</Label>
+              <Textarea
+                id="summary_content"
+                placeholder="请输入活动总结..."
+                value={summaryContent}
+                onChange={(e) => setSummaryContent(e.target.value)}
+                rows={6}
+                disabled={summarySubmitting}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSummaryDialogOpen(false)}
+              disabled={summarySubmitting}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={handleUploadSummary}
+              disabled={summarySubmitting || !summaryContent.trim()}
+            >
+              {summarySubmitting ? "上传中..." : "保存总结"}
             </Button>
           </DialogFooter>
         </DialogContent>

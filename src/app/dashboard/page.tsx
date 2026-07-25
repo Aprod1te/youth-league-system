@@ -14,16 +14,18 @@ interface DashboardStats {
   completionRate: number
   pendingApplications: number
   pendingApprovals: number
+  unreadNotifications: number
 }
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
-    totalMembers: 0,
-    inProgressTasks: 0,
-    monthlyActivities: 0,
-    completionRate: 0,
-    pendingApplications: 0,
-    pendingApprovals: 0,
+      totalMembers: 0,
+      inProgressTasks: 0,
+      monthlyActivities: 0,
+      completionRate: 0,
+      pendingApplications: 0,
+      pendingApprovals: 0,
+      unreadNotifications: 0,
   })
   const [loading, setLoading] = useState(true)
   const [recentTasks, setRecentTasks] = useState<Array<{
@@ -93,6 +95,16 @@ export default function DashboardPage() {
           .select("*", { count: "exact", head: true })
           .eq("status", "pending_approval")
 
+        // 7. Unread notifications for current user
+        const { data: { user: currentUser } } = await supabase.auth.getUser()
+        const { count: unreadCount } = currentUser
+          ? await supabase
+              .from("notifications")
+              .select("*", { count: "exact", head: true })
+              .eq("user_id", currentUser.id)
+              .eq("is_read", false)
+          : { count: 0 }
+
         setStats({
           totalMembers: memberCount ?? 0,
           inProgressTasks: taskCount ?? 0,
@@ -100,6 +112,7 @@ export default function DashboardPage() {
           completionRate: rate,
           pendingApplications: pendingAppCount ?? 0,
           pendingApprovals: pendingApprovalCount ?? 0,
+          unreadNotifications: unreadCount ?? 0,
         })
 
         // 7. Recent 3 tasks
@@ -162,6 +175,12 @@ export default function DashboardPage() {
       value: loading ? "--" : `${stats.completionRate}%`,
       icon: TrendingUp,
       description: "任务完成率",
+    },
+    {
+      title: "未读通知",
+      value: loading ? "--" : String(stats.unreadNotifications),
+      icon: Bell,
+      description: stats.unreadNotifications > 0 ? `有 ${stats.unreadNotifications} 条未读` : "无新通知",
     },
   ]
 
