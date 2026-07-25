@@ -1,0 +1,274 @@
+"use client"
+
+import { useEffect, useState, useRef } from "react"
+import { createClient } from "@/lib/supabase/client"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Users, ClipboardList, Calendar, TrendingUp } from "lucide-react"
+
+interface DashboardStats {
+  totalMembers: number
+  inProgressTasks: number
+  monthlyActivities: number
+  completionRate: number
+}
+
+export default function DashboardPage() {
+  const [stats, setStats] = useState<DashboardStats>({
+    totalMembers: 0,
+    inProgressTasks: 0,
+    monthlyActivities: 0,
+    completionRate: 0,
+  })
+  const [loading, setLoading] = useState(true)
+  const [recentTasks, setRecentTasks] = useState<Array<{
+    id: string
+    title: string
+    status: string
+    deadline: string | null
+  }>>([])
+  const [recentActivities, setRecentActivities] = useState<Array<{
+    id: string
+    title: string
+    status: string
+  }>>([])
+  const fetchedRef = useRef(false)
+  const supabaseRef = useRef(createClient())
+
+  useEffect(() => {
+    if (fetchedRef.current) return
+    fetchedRef.current = true
+
+    const supabase = supabaseRef.current
+
+    async function load() {
+      try {
+        // 1. Total members count
+        const { count: memberCount } = await supabase
+          .from("profiles")
+          .select("*", { count: "exact", head: true })
+
+        // 2. In-progress tasks count
+        const { count: taskCount } = await supabase
+          .from("tasks")
+          .select("*", { count: "exact", head: true })
+          .eq("status", "in_progress")
+
+        // 3. Monthly activities: created this month
+        const now = new Date()
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+        const { count: activityCount } = await supabase
+          .from("activities")
+          .select("*", { count: "exact", head: true })
+          .gte("created_at", startOfMonth)
+
+        // 4. Completion rate: completed / total tasks
+        const { count: totalTasks } = await supabase
+          .from("tasks")
+          .select("*", { count: "exact", head: true })
+
+        const { count: completedTasks } = await supabase
+          .from("tasks")
+          .select("*", { count: "exact", head: true })
+          .eq("status", "completed")
+
+        const rate = totalTasks && totalTasks > 0
+          ? Math.round((completedTasks || 0) / totalTasks * 100)
+          : 0
+
+        setStats({
+          totalMembers: memberCount ?? 0,
+          inProgressTasks: taskCount ?? 0,
+          monthlyActivities: activityCount ?? 0,
+          completionRate: rate,
+        })
+
+        // 5. Recent 3 tasks
+        const { data: recentTaskData } = await supabase
+          .from("tasks")
+          .select("id, title, status, deadline")
+          .order("created_at", { ascending: false })
+          .limit(3)
+
+        setRecentTasks((recentTaskData || []) as Array<{
+          id: string
+          title: string
+          status: string
+          deadline: string | null
+        }>)
+
+        // 6. Recent 3 activities
+        const { data: recentActivityData } = await supabase
+          .from("activities")
+          .select("id, title, status")
+          .order("created_at", { ascending: false })
+          .limit(3)
+
+        setRecentActivities((recentActivityData || []) as Array<{
+          id: string
+          title: string
+          status: string
+        }>)
+      } catch {
+        // Silently handle errors, stats will show 0
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    load()
+  }, [])
+
+  const statItems = [
+    {
+      title: "在编人员",
+      value: loading ? "--" : String(stats.totalMembers),
+      icon: Users,
+      description: "团委成员总数",
+    },
+    {
+      title: "进行中任务",
+      value: loading ? "--" : String(stats.inProgressTasks),
+      icon: ClipboardList,
+      description: "当前进行中的任务",
+    },
+    {
+      title: "本月活动",
+      value: loading ? "--" : String(stats.monthlyActivities),
+      icon: Calendar,
+      description: "本月计划活动",
+    },
+    {
+      title: "完成率",
+      value: loading ? "--" : `${stats.completionRate}%`,
+      icon: TrendingUp,
+      description: "任务完成率",
+    },
+  ]
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">工作台</h1>
+        <p className="text-muted-foreground">
+          欢迎回来，以下是系统概览。
+        </p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {statItems.map((stat) => (
+          <Card key={stat.title}>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                {stat.title}
+              </CardTitle>
+              <stat.icon className="size-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stat.value}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {stat.description}
+              </p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>最近任务</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {recentTasks.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                暂无任务数据。请先在"任务管理"中创建任务。
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {recentTasks.map((t) => (
+                  <div
+                    key={t.id}
+                    className="flex items-center justify-between rounded-lg border p-3"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium truncate">{t.title}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {t.deadline
+                          ? `截止：${new Date(t.deadline).toLocaleDateString("zh-CN")}`
+                          : "无截止日期"}
+                      </p>
+                    </div>
+                    <span
+                      className={`ml-3 shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                        t.status === "completed"
+                          ? "bg-green-100 text-green-700"
+                          : t.status === "in_progress"
+                          ? "bg-blue-100 text-blue-700"
+                          : t.status === "cancelled"
+                          ? "bg-red-100 text-red-700"
+                          : "bg-gray-100 text-gray-700"
+                      }`}
+                    >
+                      {t.status === "pending"
+                        ? "待处理"
+                        : t.status === "in_progress"
+                        ? "进行中"
+                        : t.status === "completed"
+                        ? "已完成"
+                        : "已取消"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>近期活动</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {recentActivities.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                暂无活动数据。请先在"活动管理"中创建活动。
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {recentActivities.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between rounded-lg border p-3"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium truncate">{a.title}</p>
+                    </div>
+                    <span
+                      className={`ml-3 shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                        a.status === "completed"
+                          ? "bg-green-100 text-green-700"
+                          : a.status === "in_progress"
+                          ? "bg-blue-100 text-blue-700"
+                          : a.status === "cancelled"
+                          ? "bg-red-100 text-red-700"
+                          : "bg-gray-100 text-gray-700"
+                      }`}
+                    >
+                      {a.status === "pending"
+                        ? "待处理"
+                        : a.status === "in_progress"
+                        ? "进行中"
+                        : a.status === "completed"
+                        ? "已完成"
+                        : "已取消"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  )
+}
