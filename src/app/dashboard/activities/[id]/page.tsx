@@ -24,7 +24,17 @@ interface ActivityDetail {
   department_id: string | null
   status: string
   max_participants: number | null
+  created_at: string
+}
+
+interface ActivityReport {
+  id: string
+  activity_id: string
   summary: string | null
+  photos: string[] | null
+  attachments: string[] | null
+  participant_count: number | null
+  submitted_by: string
   created_at: string
 }
 
@@ -55,6 +65,7 @@ export default function ActivityDetailPage() {
   const activityId = params.id as string
 
   const [activity, setActivity] = useState<ActivityDetail | null>(null)
+  const [activityReport, setActivityReport] = useState<ActivityReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<SupabaseUser | null>(null)
@@ -90,7 +101,19 @@ export default function ActivityDetailPage() {
         const singleActivity = activityData as unknown as ActivityDetail
         setActivity(singleActivity)
 
-        // Step 2: Fetch profiles to build name map
+        // Step 2: Fetch the activity report (if exists)
+        const { data: reportData } = await supabase
+          .from("activity_reports")
+          .select("*")
+          .eq("activity_id", activityId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+
+        if (reportData && reportData.length > 0) {
+          setActivityReport(reportData[0] as ActivityReport)
+        }
+
+        // Step 3: Fetch profiles to build name map
         const { data: profileData } = await supabase
           .from("profiles")
           .select("id, full_name")
@@ -119,8 +142,8 @@ export default function ActivityDetailPage() {
 
     const { error: submitError } = await supabase.from("activity_reports").insert({
       activity_id: activity.id,
-      user_id: user.id,
-      content: summary.trim(),
+      summary: summary.trim(),
+      submitted_by: user.id,
     })
 
     if (submitError) {
@@ -148,7 +171,7 @@ export default function ActivityDetailPage() {
   }
 
   const showSummarySection = activity && activity.status === "completed"
-  const hasSummary = activity?.summary && activity.summary.trim().length > 0
+  const hasSummary = activityReport?.summary && activityReport.summary.trim().length > 0
 
   return (
     <div className="space-y-6">
@@ -262,7 +285,7 @@ export default function ActivityDetailPage() {
               </CardHeader>
               <CardContent>
                 <div className="rounded-lg border bg-muted/20 p-4">
-                  <p className="text-sm whitespace-pre-wrap">{activity.summary}</p>
+                  <p className="text-sm whitespace-pre-wrap">{activityReport!.summary}</p>
                 </div>
               </CardContent>
             </Card>

@@ -147,14 +147,18 @@ export default function ActivityApprovalPage() {
     // Create notification for the organizer
     const targetActivity = activities.find((a) => a.id === activityId)
     if (targetActivity) {
-      await supabase.from("notifications").insert({
+      console.log("正在创建通知给用户:", targetActivity.organizer_id)
+      const { error: notifError } = await supabase.from("notifications").insert({
         user_id: targetActivity.organizer_id,
         title: "活动审批通过",
         content: `你申请的活动「${targetActivity.title}」已通过审批`,
-        type: "activity_approved",
+        type: "activity",
         related_id: activityId,
         is_read: false,
       })
+      if (notifError) {
+        console.error("创建通知失败:", notifError)
+      }
     }
 
     toast.add({
@@ -201,15 +205,19 @@ export default function ActivityApprovalPage() {
     // Create notification for the organizer
     const targetActivity = activities.find((a) => a.id === rejectTargetId)
     if (targetActivity) {
+      console.log("正在创建通知给用户:", targetActivity.organizer_id)
       const reasonText = rejectNote.trim() ? `原因：${rejectNote.trim()}` : ""
-      await supabase.from("notifications").insert({
+      const { error: notifError } = await supabase.from("notifications").insert({
         user_id: targetActivity.organizer_id,
         title: "活动审批未通过",
         content: `你申请的活动「${targetActivity.title}」未通过审批。${reasonText}`,
-        type: "activity_rejected",
+        type: "activity",
         related_id: rejectTargetId,
         is_read: false,
       })
+      if (notifError) {
+        console.error("创建通知失败:", notifError)
+      }
     }
 
     toast.add({

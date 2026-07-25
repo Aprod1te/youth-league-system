@@ -226,27 +226,42 @@ export default function ActivitiesPage() {
   }
 
   const handleUploadSummary = async () => {
-    if (!summaryTargetId || !summaryContent.trim()) return
+    if (!summaryTargetId || !summaryContent.trim() || !user) return
 
     setSummarySubmitting(true)
     const supabase = supabaseRef.current
 
+    // Insert into activity_reports table (not activities)
+    const { error: insertError } = await supabase
+      .from("activity_reports")
+      .insert({
+        activity_id: summaryTargetId,
+        summary: summaryContent.trim(),
+        submitted_by: user.id,
+      })
+
+    if (insertError) {
+      toast.add({
+        type: "error",
+        title: "上传失败",
+        description: insertError.message,
+      })
+      setSummarySubmitting(false)
+      return
+    }
+
+    // Also mark activity as completed
     const { error: updateError } = await supabase
       .from("activities")
-      .update({
-        summary: summaryContent.trim(),
-        status: "completed",
-      })
+      .update({ status: "completed" })
       .eq("id", summaryTargetId)
 
     if (updateError) {
       toast.add({
         type: "error",
-        title: "上传失败",
+        title: "更新状态失败",
         description: updateError.message,
       })
-      setSummarySubmitting(false)
-      return
     }
 
     toast.add({

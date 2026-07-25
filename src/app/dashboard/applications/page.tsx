@@ -184,15 +184,19 @@ export default function ApplicationsPage() {
     }
 
     // Create notification for the applicant
+    console.log("正在创建通知给用户:", app.user_id)
     const deptName = deptNameMap[app.department_id] || ""
-    await supabase.from("notifications").insert({
+    const { error: notifError } = await supabase.from("notifications").insert({
       user_id: app.user_id,
       title: "入部申请已通过",
-      content: `你的入部申请已通过，欢迎加入${deptName}`,
-      type: "application_approved",
+      content: `恭喜！你的入部申请已通过审核，欢迎加入${deptName}！`,
+      type: "application",
       related_id: app.id,
       is_read: false,
     })
+    if (notifError) {
+      console.error("创建通知失败:", notifError)
+    }
 
     toast.add({
       type: "success",
@@ -242,16 +246,20 @@ export default function ApplicationsPage() {
 
     // Create notification for the applicant
     if (targetApp) {
+      console.log("正在创建通知给用户:", targetApp.user_id)
       const deptName = deptNameMap[targetApp.department_id] || ""
       const reasonText = rejectNote.trim() ? `原因：${rejectNote.trim()}` : ""
-      await supabase.from("notifications").insert({
+      const { error: notifError } = await supabase.from("notifications").insert({
         user_id: targetApp.user_id,
         title: "入部申请未通过",
-        content: `你的入部申请未通过${reasonText}`,
-        type: "application_rejected",
+        content: `很遗憾，你的入部申请${deptName ? `（${deptName}）` : ""}未通过审核。${reasonText}`,
+        type: "application",
         related_id: rejectTargetId,
         is_read: false,
       })
+      if (notifError) {
+        console.error("创建通知失败:", notifError)
+      }
     }
 
     toast.add({

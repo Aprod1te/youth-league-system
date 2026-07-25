@@ -8,11 +8,12 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuSeparator,
+  DropdownMenuItem,
 } from "@/components/ui/dropdown-menu"
+
 import {
   LayoutDashboard,
   Users,
@@ -25,6 +26,7 @@ import {
   User,
   ChevronLeft,
   Bell,
+  Check,
 } from "lucide-react"
 import type { User as SupabaseUser } from "@supabase/supabase-js"
 
@@ -41,7 +43,7 @@ interface Notification {
 const allNavigation = [
   { name: "工作台", href: "/dashboard", icon: LayoutDashboard, roles: ["admin", "minister", "member", "applicant"] },
   { name: "部门管理", href: "/dashboard/departments", icon: Building2, roles: ["admin", "minister", "member", "applicant"] },
-  { name: "人员管理", href: "/dashboard/members", icon: Users, roles: ["admin", "minister"] },
+  { name: "人员管理", href: "/dashboard/members", icon: Users, roles: ["admin", "minister", "member"] },
   { name: "任务管理", href: "/dashboard/tasks", icon: ClipboardList, roles: ["admin", "minister", "member"] },
   { name: "活动管理", href: "/dashboard/activities", icon: Calendar, roles: ["admin", "minister", "member", "applicant"] },
   { name: "活动审批", href: "/dashboard/activities/approval", icon: Calendar, roles: ["admin", "minister"] },
@@ -58,21 +60,56 @@ export default function DashboardLayout({
   const [user, setUser] = useState<SupabaseUser | null>(null)
   const [userRole, setUserRole] = useState<string>("applicant")
   const [loading, setLoading] = useState(true)
+  const [notifications, setNotifications] = useState<Notification[]>([])
+  const [notifDropdownOpen, setNotifDropdownOpen] = useState(false)
+  
   const pathname = usePathname()
   const router = useRouter()
   const supabaseRef = useRef(createClient())
 
-  // Notification state
-  const [notifications, setNotifications] = useState<Notification[]>([])
-  const [notifOpen, setNotifOpen] = useState(false)
+  const unreadCount = notifications.filter((n) => !n.is_read).length
 
-  const fetchNotifications = async () => {
-    if (!user) return
+  // 获取用户和通知
+  useEffect(() => {
+    const supabase = supabaseRef.current
+
+    const getUser = async () => {
+      const {
+        data: { user: currentUser },
+      } = await supabase.auth.getUser()
+      
+      if (!currentUser) {
+        router.push("/login")
+        return
+      }
+      
+      setUser(currentUser)
+
+      // 获取用户角色
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", currentUser.id)
+        .maybeSingle()
+
+      if (profileData?.role) {
+        setUserRole(profileData.role)
+      }
+
+      // 获取通知
+      await fetchNotifications(currentUser.id)
+      setLoading(false)
+    }
+    
+    getUser()
+  }, [router])
+
+  const fetchNotifications = async (userId: string) => {
     const supabase = supabaseRef.current
     const { data } = await supabase
       .from("notifications")
       .select("*")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(5)
 
@@ -81,61 +118,23 @@ export default function DashboardLayout({
     }
   }
 
-  const unreadCount = notifications.filter((n) => !n.is_read).length
-
-  useEffect(() => {
+  const handleMarkAllRead = async () => {
+    if (!user || unreadCount === 0) return
     const supabase = supabaseRef.current
-
-    const getUser = async () => {
-      const {
-        data: { user: currentUser },
-      } = await supabase.auth.getUser()
-      if (!currentUser) {
-        router.push("/login")
-      } else {
-        setUser(currentUser)
-
-        // Fetch user role from profiles
-        const { data: profileData } = await supabase
-          .from("profiles")
-          .select("role")
-          .eq("id", currentUser.id)
-          .maybeSingle()
-
-        if (profileData?.role) {
-          setUserRole(profileData.role)
-        }
-
-        // Fetch notifications
-        const { data: notifData } = await supabase
-          .from("notifications")
-          .select("*")
-          .eq("user_id", currentUser.id)
-          .order("created_at", { ascending: false })
-          .limit(5)
-
-        if (notifData) {
-          setNotifications(notifData as Notification[])
-        }
-      }
-      setLoading(false)
-    }
-    getUser()
-  }, [router])
+    
+    await supabase
+      .from("notifications")
+      .update({ is_read: true })
+      .eq("user_id", user.id)
+      .eq("is_read", false)
+    
+    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
+  }
 
   const handleSignOut = async () => {
     const supabase = supabaseRef.current
     await supabase.auth.signOut()
-    router.refresh()
     router.push("/login")
-  }
-
-  const handleMarkAsRead = async (notifId: string) => {
-    const supabase = supabaseRef.current
-    await supabase.from("notifications").update({ is_read: true }).eq("id", notifId)
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === notifId ? { ...n, is_read: true } : n))
-    )
   }
 
   const navigation = allNavigation.filter((item) => item.roles.includes(userRole))
@@ -148,13 +147,11 @@ export default function DashboardLayout({
     )
   }
 
-  if (!user) {
-    return null
-  }
+  if (!user) return null
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      {/* Sidebar backdrop on mobile */}
+      {/* 移动端遮罩 */}
       {sidebarOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/50 lg:hidden"
@@ -162,13 +159,12 @@ export default function DashboardLayout({
         />
       )}
 
-      {/* Sidebar */}
+      {/* 侧边栏 */}
       <aside
         className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r bg-card transition-all duration-300 lg:static lg:z-auto ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         } ${collapsed ? "w-16" : "w-64"}`}
       >
-        {/* Sidebar header */}
         <div className="flex h-14 items-center border-b px-4">
           {!collapsed && (
             <Link href="/dashboard" className="flex items-center gap-2 font-semibold text-lg">
@@ -198,7 +194,6 @@ export default function DashboardLayout({
           </Button>
         </div>
 
-        {/* Navigation */}
         <nav className="flex-1 space-y-1 p-2">
           {navigation.map((item) => {
             const isActive = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href))
@@ -220,7 +215,6 @@ export default function DashboardLayout({
           })}
         </nav>
 
-        {/* Sidebar footer */}
         <div className="border-t p-2">
           {!collapsed && (
             <p className="px-3 py-2 text-xs text-muted-foreground">
@@ -230,9 +224,9 @@ export default function DashboardLayout({
         </div>
       </aside>
 
-      {/* Main content */}
+      {/* 主内容区 */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Top header */}
+        {/* 顶部导航栏 */}
         <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-card px-4 lg:px-6">
           <Button
             variant="ghost"
@@ -245,19 +239,94 @@ export default function DashboardLayout({
 
           <div className="flex-1" />
 
-          {/* Notification Bell */}
-          <button
-            onClick={() => window.location.href = '/dashboard/notifications'}
-            className="relative rounded-full hover:bg-accent hover:text-accent-foreground inline-flex items-center justify-center size-9"
-            aria-label="通知"
-          >
-            <Bell className="size-5" />
-            <span className="absolute top-1 right-1 flex size-4 items-center justify-center rounded-full bg-red-500 text-[10px] text-white">
-              {unreadCount > 9 ? "9+" : unreadCount || ""}
-            </span>
-          </button>
+        {/* 通知铃铛 */}
+<div className="relative">
+  <div
+    onClick={() => setNotifDropdownOpen(!notifDropdownOpen)}
+    className="relative inline-flex items-center justify-center rounded-full size-9 hover:bg-accent hover:text-accent-foreground cursor-pointer"
+    role="button"
+    aria-label="通知"
+  >
+    <Bell className="size-5" />
+    {unreadCount > 0 && (
+      <span className="absolute -top-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] text-white font-bold">
+        {unreadCount > 99 ? "99+" : unreadCount}
+      </span>
+    )}
+  </div>
 
-          <span className="hidden text-sm text-muted-foreground sm:inline-block">
+  {notifDropdownOpen && (
+    <div className="absolute right-0 top-full mt-2 w-80 rounded-md border bg-popover shadow-md z-50">
+      <div className="flex items-center justify-between px-3 py-2 border-b">
+        <span className="font-medium">通知</span>
+        {unreadCount > 0 && (
+          <button 
+            className="text-xs text-primary hover:underline"
+            onClick={(e) => { e.stopPropagation(); handleMarkAllRead(); }}
+          >
+            全部已读
+          </button>
+        )}
+      </div>
+      
+      {notifications.length === 0 ? (
+        <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+          暂无通知
+        </div>
+      ) : (
+        <div className="max-h-80 overflow-y-auto">
+          {notifications.map((notif) => (
+            <div
+              key={notif.id}
+              className={`px-3 py-3 border-b last:border-0 cursor-pointer hover:bg-muted ${!notif.is_read ? "bg-muted/50" : ""}`}
+              onClick={() => {
+                if (!notif.is_read && user) {
+                  supabaseRef.current
+                    .from("notifications")
+                    .update({ is_read: true })
+                    .eq("id", notif.id)
+                    .then(() => {
+                      setNotifications((prev) =>
+                        prev.map((n) =>
+                          n.id === notif.id ? { ...n, is_read: true } : n
+                        )
+                      );
+                    });
+                }
+                setNotifDropdownOpen(false);
+                if (notif.type === "application") router.push("/dashboard/applications");
+                else if (notif.type === "activity") router.push("/dashboard/activities/approval");
+                else if (notif.type === "task") router.push("/dashboard/tasks");
+              }}
+            >
+              <p className={`text-sm ${!notif.is_read ? "font-semibold" : ""}`}>
+                {notif.title}
+              </p>
+              <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
+                {notif.content}
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                {new Date(notif.created_at).toLocaleString()}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+      
+      <div className="border-t px-3 py-2">
+        <Link
+          href="/dashboard/notifications"
+          className="block text-center text-xs text-primary hover:underline"
+          onClick={() => setNotifDropdownOpen(false)}
+        >
+          查看全部通知
+        </Link>
+      </div>
+    </div>
+  )}
+</div>
+
+          <span className="hidden text-sm text-muted-foreground sm:inline-block max-w-[200px] truncate">
             {user.email}
           </span>
 
@@ -272,11 +341,17 @@ export default function DashboardLayout({
             <DropdownMenuContent align="end" className="w-48">
               <div className="px-2 py-1.5">
                 <p className="text-sm font-medium truncate">{user.email}</p>
+                <p className="text-xs text-muted-foreground capitalize">{userRole}</p>
               </div>
               <DropdownMenuSeparator />
-              <DropdownMenuItem>
-                <User className="mr-2 size-4" />
-                <span>个人设置</span>
+              <DropdownMenuItem onClick={() => router.push("/dashboard/notifications")}>
+                <Bell className="mr-2 size-4" />
+                <span>通知中心</span>
+                {unreadCount > 0 && (
+                  <span className="ml-auto bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">
+                    {unreadCount}
+                  </span>
+                )}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -290,7 +365,6 @@ export default function DashboardLayout({
           </DropdownMenu>
         </header>
 
-        {/* Page content */}
         <main className="flex-1 overflow-y-auto p-4 lg:p-6">{children}</main>
       </div>
     </div>
