@@ -160,12 +160,25 @@ export default function ActivityDetailPage() {
     }
 
     toast.add({
-      type: "success",
-      title: "提交成功",
-      description: "活动总结已提交",
-    })
+  type: "success",
+  title: "提交成功",
+  description: "活动总结已提交",
+})
+
+// ← 添加这 10 行：重新获取报告
+const { data: newReportData } = await supabase
+  .from("activity_reports")
+  .select("*")
+  .eq("activity_id", activityId)
+  .order("created_at", { ascending: false })
+  .limit(1)
+
+if (newReportData && newReportData.length > 0) {
+  setActivityReport(newReportData[0] as ActivityReport)
+}
 
     setSummary("")
+    setParticipantCount("")
     setSubmitting(false)
   }
 
