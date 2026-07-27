@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState, useRef, useCallback } from "react"
+import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -39,6 +40,7 @@ const roleLabel: Record<string, string> = {
 }
 
 export default function MembersPage() {
+  const router = useRouter()
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [filteredProfiles, setFilteredProfiles] = useState<Profile[]>([])
   const [filterRole, setFilterRole] = useState("all")
@@ -52,6 +54,20 @@ export default function MembersPage() {
     fetchedRef.current = true
 
     try {
+      // Route guard: applicant cannot access this page
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      if (currentUser) {
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", currentUser.id)
+          .single()
+        if (profileData && (profileData as { role: string }).role === "applicant") {
+          router.push("/dashboard")
+          return
+        }
+      }
+
       const { data, error } = await supabase
         .from("profiles")
         .select("id, full_name, student_id, role, created_at, department:departments(id, name)")

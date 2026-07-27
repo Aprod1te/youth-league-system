@@ -64,6 +64,7 @@ export default function TaskDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [userRole, setUserRole] = useState<string | null>(null)
   const [feedback, setFeedback] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
@@ -89,6 +90,18 @@ export default function TaskDetailPage() {
       try {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
         setUser(currentUser)
+
+        // Get user role
+        if (currentUser) {
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", currentUser.id)
+            .single()
+          if (profileData) {
+            setUserRole((profileData as { role: string }).role)
+          }
+        }
 
         // Step 1: Fetch the task
         const { data: taskData, error: taskError } = await supabase
@@ -196,7 +209,11 @@ export default function TaskDetailPage() {
     setSubmitting(false)
   }
 
-  const canSubmit = task && ["pending", "in_progress"].includes(task.status)
+  const canSubmit =
+    task &&
+    ["pending", "in_progress"].includes(task.status) &&
+    userRole &&
+    ["admin", "minister", "officer"].includes(userRole)
 
   const getCreatorName = (userId: string) => userNameMap[userId] || userId
   const getAssignName = (userId: string | null) => {

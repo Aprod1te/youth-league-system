@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState, useRef } from "react"
+import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -55,6 +56,7 @@ const statusLabel: Record<string, string> = {
 }
 
 export default function ApplicationsPage() {
+  const router = useRouter()
   const [applications, setApplications] = useState<Application[]>([])
   const [filteredApplications, setFilteredApplications] = useState<Application[]>([])
   const [filterStatus, setFilterStatus] = useState("all")
@@ -106,6 +108,12 @@ export default function ApplicationsPage() {
         }
         setUserRole(currentRole)
         setUserDeptId(currentDeptId)
+
+        // Route guard: applicant and member cannot access this page
+        if (currentRole === "applicant" || currentRole === "member") {
+          router.push("/dashboard")
+          return
+        }
 
         // Step 1: Fetch applications
         let appQuery = supabase

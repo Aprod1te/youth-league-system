@@ -80,6 +80,7 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<User | null>(null)
+  const [userRole, setUserRole] = useState<string | null>(null)
   const [profiles, setProfiles] = useState<ProfileOption[]>([])
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
 
@@ -140,6 +141,20 @@ export default function TasksPage() {
       try {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
         setUser(currentUser)
+
+        // Get user role
+        if (currentUser) {
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", currentUser.id)
+            .single()
+
+          if (profileData) {
+            setUserRole((profileData as { role: string }).role)
+          }
+        }
+
         await loadTasks()
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败")
@@ -167,6 +182,8 @@ export default function TasksPage() {
   const getCreatorName = (userId: string) => {
     return userNameMap[userId] || userId
   }
+
+  const canCreateTask = userRole === "admin" || userRole === "minister"
 
   const handleCreateTask = async () => {
     if (!user || !newTitle.trim()) return
@@ -256,10 +273,12 @@ export default function TasksPage() {
               </SelectContent>
             </Select>
           </div>
-          <Button onClick={() => setDialogOpen(true)}>
-            <Plus className="mr-1.5 size-4" />
-            新建任务
-          </Button>
+          {canCreateTask && (
+            <Button onClick={() => setDialogOpen(true)}>
+              <Plus className="mr-1.5 size-4" />
+              新建任务
+            </Button>
+          )}
         </div>
       </div>
 

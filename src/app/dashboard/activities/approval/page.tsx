@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState, useRef } from "react"
+import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -45,6 +46,7 @@ const statusLabel: Record<string, string> = {
 }
 
 export default function ActivityApprovalPage() {
+  const router = useRouter()
   const [activities, setActivities] = useState<Activity[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -89,6 +91,12 @@ export default function ActivityApprovalPage() {
           }
           setUserRole(currentRole)
           setUserDeptId(currentDeptId)
+
+          // Route guard: applicant and member cannot access this page
+          if (currentRole === "applicant" || currentRole === "member") {
+            router.push("/dashboard")
+            return
+          }
 
           if (currentRole !== "admin" && currentRole !== "secretary" && currentRole !== "minister") {
             setError("您没有审批权限")
