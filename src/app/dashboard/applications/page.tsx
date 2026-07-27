@@ -201,6 +201,7 @@ export default function ApplicationsPage() {
       .eq("id", app.user_id)
 
     if (profileError) {
+      console.error("更新用户资料失败:", profileError)
       toast.add({
         type: "error",
         title: "更新用户信息失败",
