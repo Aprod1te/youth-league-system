@@ -165,14 +165,13 @@ export default function ActivityDetailPage() {
   description: "活动总结已提交",
 })
 
-// ← 添加这行：刷新页面，按钮就会消失
 window.location.reload()
 
 setSummary("")
 setParticipantCount("")
 setSubmitting(false)
 
-// ← 添加这 10 行：重新获取报告
+// 重新获取报告
 const { data: newReportData } = await supabase
   .from("activity_reports")
   .select("*")
