@@ -8,7 +8,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { toast } from "@/components/ui/toast"
-import { Building2 } from "lucide-react"
+import { PageHeader } from "@/components/ui/page-header"
+import { EmptyState } from "@/components/ui/empty-state"
+import { Building2, Users, CheckCircle2, Clock3 } from "lucide-react"
 import type { User } from "@supabase/supabase-js"
 
 interface Department {
@@ -22,9 +24,7 @@ export default function DepartmentsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<User | null>(null)
-  // userDepartmentId: the department_id from profiles (most accurate — set after approval)
   const [userDepartmentId, setUserDepartmentId] = useState<string | null>(null)
-  // applicationStatusMap: department_id -> application status (pending/approved/rejected)
   const [applicationStatusMap, setApplicationStatusMap] = useState<Record<string, string>>({})
   const [selectedDept, setSelectedDept] = useState<Department | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -59,7 +59,6 @@ export default function DepartmentsPage() {
         setDepartments(newDepts)
 
         if (currentUser) {
-          // 1) Fetch user's current department_id from profiles (most accurate)
           const { data: profileData } = await supabase
             .from("profiles")
             .select("department_id")
@@ -70,7 +69,6 @@ export default function DepartmentsPage() {
             setUserDepartmentId(profileData.department_id)
           }
 
-          // 2) Fetch all applications for this user to determine per-department status
           const { data: appData } = await supabase
             .from("applications")
             .select("department_id, status")
@@ -79,7 +77,6 @@ export default function DepartmentsPage() {
           if (appData && appData.length > 0) {
             const map: Record<string, string> = {}
             for (const app of appData) {
-              // Keep the most recent/approved status per department
               const existing = map[app.department_id]
               if (!existing || app.status === "approved") {
                 map[app.department_id] = app.status
@@ -117,90 +114,107 @@ export default function DepartmentsPage() {
     })
 
     if (error) {
-      toast.add({
-        type: "error",
-        title: "提交失败",
-        description: error.message,
-      })
+      toast.add({ type: "error", title: "提交失败", description: error.message })
     } else {
       setApplicationStatusMap((prev) => ({ ...prev, [selectedDept.id]: "pending" }))
-      toast.add({
-        type: "success",
-        title: "申请成功",
-        description: "申请已提交，等待审核",
-      })
+      toast.add({ type: "success", title: "申请成功", description: "申请已提交，等待审核" })
       setDialogOpen(false)
     }
     setSubmitting(false)
   }
 
-  const getButtonState = (deptId: string): { label: string; disabled: boolean; onClick: (() => void) | undefined } => {
-    // Priority 1: profiles.department_id matches → already a member
+  const getButtonState = (deptId: string): { label: string; disabled: boolean; variant?: "default" | "outline" | "secondary"; icon?: React.ReactNode; onClick: (() => void) | undefined } => {
     if (userDepartmentId === deptId) {
-      return { label: "已加入", disabled: true, onClick: undefined }
+      return { label: "已加入", disabled: true, variant: "secondary", icon: <CheckCircle2 className="size-4" />, onClick: undefined }
     }
-
-    // Priority 2: Check application status for this department
     const appStatus = applicationStatusMap[deptId]
     if (appStatus === "pending") {
-      return { label: "审核中", disabled: true, onClick: undefined }
+      return { label: "审核中", disabled: true, variant: "outline", icon: <Clock3 className="size-4" />, onClick: undefined }
     }
-
-    // Priority 3: No application or rejected → can apply
-    return { label: "申请加入", disabled: false, onClick: () => handleApply(departments.find((d) => d.id === deptId)!) }
+    return { label: "申请加入", disabled: false, variant: "outline", icon: <Users className="size-4" />, onClick: () => handleApply(departments.find((d) => d.id === deptId)!) }
   }
 
-  // De-duplicate by id — ensures each department renders only once
-  const uniqueDepartments = Array.from(
-    new Map(departments.map((d) => [d.id, d])).values()
-  )
+  const uniqueDepartments = Array.from(new Map(departments.map((d) => [d.id, d])).values())
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="部门管理" description="浏览和管理团委各部门" />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
+              <CardContent className="p-6 space-y-3 animate-pulse">
+                <div className="size-10 rounded-lg bg-muted" />
+                <div className="h-5 w-24 rounded bg-muted" />
+                <div className="h-4 w-full rounded bg-muted" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold tracking-tight">部门管理</h1>
+      <PageHeader
+        title="部门管理"
+        description="浏览和管理团委各部门，申请加入感兴趣的部门"
+      />
 
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <p className="text-muted-foreground">加载中...</p>
-        </div>
-      ) : error ? (
+      {error ? (
         <Card className="border-destructive/50">
-          <CardContent className="py-8 text-center">
-            <p className="text-destructive">{error}</p>
+          <CardContent className="py-12 text-center">
+            <Building2 className="size-12 text-muted-foreground/30 mx-auto mb-4" />
+            <p className="text-destructive text-sm">{error}</p>
           </CardContent>
         </Card>
       ) : uniqueDepartments.length === 0 ? (
-        <Card>
-          <CardContent className="py-8 text-center">
-            <p className="text-muted-foreground">暂无部门数据</p>
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={<Building2 className="size-12" />}
+          title="暂无部门数据"
+          description="系统还没有创建任何部门"
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {uniqueDepartments.map((dept) => {
-            const { label, disabled, onClick } = getButtonState(dept.id)
+            const { label, disabled, variant, icon, onClick } = getButtonState(dept.id)
+            const isJoined = userDepartmentId === dept.id
             return (
-              <Card key={dept.id} className="hover:shadow-md transition-shadow flex flex-col">
+              <Card
+                key={dept.id}
+                className={`group hover:shadow-md transition-all duration-150 hover:border-primary/20 flex flex-col ${
+                  isJoined ? "ring-1 ring-primary/30" : ""
+                }`}
+              >
                 <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10">
-                      <Building2 className="size-5 text-primary" />
+                  <div className="flex items-center gap-3">
+                    <div className={`flex size-11 items-center justify-center rounded-xl transition-colors ${
+                      isJoined ? "bg-primary text-primary-foreground" : "bg-muted text-primary group-hover:bg-primary/10"
+                    }`}>
+                      <Building2 className="size-5" />
                     </div>
-                    <CardTitle className="text-lg">{dept.name}</CardTitle>
+                    <div>
+                      <CardTitle className="text-base">{dept.name}</CardTitle>
+                      {isJoined && (
+                        <p className="text-xs text-primary font-medium mt-0.5">已加入</p>
+                      )}
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="flex-1">
-                  <CardDescription>
+                  <CardDescription className="line-clamp-2">
                     {dept.description || "暂无描述"}
                   </CardDescription>
                 </CardContent>
                 <CardFooter>
                   <Button
-                    variant="outline"
-                    className="w-full"
+                    variant={variant || "outline"}
+                    className="w-full gap-2"
                     disabled={disabled}
                     onClick={onClick}
                   >
+                    {icon}
                     {label}
                   </Button>
                 </CardFooter>
@@ -216,13 +230,13 @@ export default function DepartmentsPage() {
           <DialogHeader>
             <DialogTitle>申请加入部门</DialogTitle>
             <DialogDescription>
-              提交申请后需等待管理员审核
+              提交申请后需等待管理员或部长审核
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>申请部门</Label>
-              <p className="text-sm font-medium">{selectedDept?.name}</p>
+            <div className="rounded-lg border border-border bg-muted/50 p-3">
+              <Label className="text-xs text-muted-foreground">申请部门</Label>
+              <p className="text-sm font-medium mt-0.5">{selectedDept?.name}</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="reason">申请理由（至少10个字）</Label>
@@ -240,17 +254,10 @@ export default function DepartmentsPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDialogOpen(false)}
-              disabled={submitting}
-            >
+            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={submitting}>
               取消
             </Button>
-            <Button
-              onClick={handleSubmitApplication}
-              disabled={submitting || reason.trim().length < 10}
-            >
+            <Button onClick={handleSubmitApplication} disabled={submitting || reason.trim().length < 10}>
               {submitting ? "提交中..." : "提交申请"}
             </Button>
           </DialogFooter>
