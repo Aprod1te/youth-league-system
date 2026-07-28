@@ -1,22 +1,26 @@
 "use client"
 
 import { useEffect, useState, useRef } from "react"
+import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
 import { toast } from "@/components/ui/toast"
 import { PageHeader } from "@/components/ui/page-header"
 import { EmptyState } from "@/components/ui/empty-state"
-import { Building2, Users, CheckCircle2, Clock3 } from "lucide-react"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import { Building2, Users, CheckCircle2, Clock3, Pencil, Trash2, ArrowRight } from "lucide-react"
 import type { User } from "@supabase/supabase-js"
 
 interface Department {
   id: string
   name: string
   description: string | null
+  max_members: number | null
 }
 
 export default function DepartmentsPage() {
@@ -24,12 +28,28 @@ export default function DepartmentsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<User | null>(null)
+  const [userRole, setUserRole] = useState<string>("applicant")
   const [userDepartmentId, setUserDepartmentId] = useState<string | null>(null)
   const [applicationStatusMap, setApplicationStatusMap] = useState<Record<string, string>>({})
   const [selectedDept, setSelectedDept] = useState<Department | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [reason, setReason] = useState("")
   const [submitting, setSubmitting] = useState(false)
+
+  // Edit state
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [editingDept, setEditingDept] = useState<Department | null>(null)
+  const [editName, setEditName] = useState("")
+  const [editDescription, setEditDescription] = useState("")
+  const [editMaxMembers, setEditMaxMembers] = useState("")
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+
+  // Delete state
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deletingDept, setDeletingDept] = useState<Department | null>(null)
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false)
+
   const didFetch = useRef(false)
   const supabaseRef = useRef(createClient())
 
@@ -46,7 +66,7 @@ export default function DepartmentsPage() {
 
         const { data: deptData, error: deptError } = await supabase
           .from("departments")
-          .select("id, name, description")
+          .select("id, name, description, max_members")
           .order("name")
 
         if (deptError) {
@@ -61,12 +81,15 @@ export default function DepartmentsPage() {
         if (currentUser) {
           const { data: profileData } = await supabase
             .from("profiles")
-            .select("department_id")
+            .select("department_id, role")
             .eq("id", currentUser.id)
             .maybeSingle()
 
           if (profileData?.department_id) {
             setUserDepartmentId(profileData.department_id)
+          }
+          if (profileData?.role) {
+            setUserRole(profileData.role)
           }
 
           const { data: appData } = await supabase
@@ -121,6 +144,94 @@ export default function DepartmentsPage() {
       setDialogOpen(false)
     }
     setSubmitting(false)
+  }
+
+  // Edit department
+  const handleEditOpen = (dept: Department) => {
+    setEditingDept(dept)
+    setEditName(dept.name)
+    setEditDescription(dept.description || "")
+    setEditMaxMembers(dept.max_members?.toString() || "50")
+    setEditError(null)
+    setEditDialogOpen(true)
+  }
+
+  const handleEditSubmit = async () => {
+    if (!editingDept) return
+    if (!editName.trim()) {
+      setEditError("部门名称不能为空")
+      return
+    }
+    const maxMembersNum = parseInt(editMaxMembers)
+    if (!editMaxMembers || isNaN(maxMembersNum) || maxMembersNum <= 0) {
+      setEditError("人数上限必须为正整数")
+      return
+    }
+
+    setEditSubmitting(true)
+    setEditError(null)
+    const supabase = supabaseRef.current
+    const { error } = await supabase
+      .from("departments")
+      .update({
+        name: editName.trim(),
+        description: editDescription.trim() || null,
+        max_members: maxMembersNum,
+      })
+      .eq("id", editingDept.id)
+
+    if (error) {
+      setEditError(error.message)
+    } else {
+      setDepartments((prev) =>
+        prev.map((d) =>
+          d.id === editingDept.id
+            ? { ...d, name: editName.trim(), description: editDescription.trim() || null, max_members: maxMembersNum }
+            : d
+        )
+      )
+      toast.add({ type: "success", title: "更新成功", description: "部门信息已更新" })
+      setEditDialogOpen(false)
+    }
+    setEditSubmitting(false)
+  }
+
+  // Delete department
+  const handleDeleteOpen = (dept: Department) => {
+    setDeletingDept(dept)
+    setDeleteDialogOpen(true)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!deletingDept) return
+    setDeleteSubmitting(true)
+    const supabase = supabaseRef.current
+
+    // Remove members from this department first
+    await supabase
+      .from("profiles")
+      .update({ department_id: null, role: "applicant" })
+      .eq("department_id", deletingDept.id)
+
+    // Delete department
+    const { error } = await supabase
+      .from("departments")
+      .delete()
+      .eq("id", deletingDept.id)
+
+    if (error) {
+      toast.add({ type: "error", title: "删除失败", description: error.message })
+    } else {
+      setDepartments((prev) => prev.filter((d) => d.id !== deletingDept.id))
+      toast.add({ type: "success", title: "删除成功", description: "部门已删除" })
+      setDeleteDialogOpen(false)
+    }
+    setDeleteSubmitting(false)
+  }
+
+  // Check if user is the minister of a specific department
+  const isMinisterOf = (deptId: string) => {
+    return userDepartmentId === deptId && userRole === "minister"
   }
 
   const getButtonState = (deptId: string): { label: string; disabled: boolean; variant?: "default" | "outline" | "secondary"; icon?: React.ReactNode; onClick: (() => void) | undefined } => {
@@ -180,44 +291,97 @@ export default function DepartmentsPage() {
           {uniqueDepartments.map((dept) => {
             const { label, disabled, variant, icon, onClick } = getButtonState(dept.id)
             const isJoined = userDepartmentId === dept.id
+            const canEdit = userRole === "admin" || (userRole === "minister" && isMinisterOf(dept.id))
+            const canDelete = userRole === "admin"
             return (
               <Card
                 key={dept.id}
-                className={`group hover:shadow-md transition-all duration-150 hover:border-primary/20 flex flex-col ${
+                className={`group hover:shadow-md transition-all duration-150 hover:border-primary/20 flex flex-col relative ${
                   isJoined ? "ring-1 ring-primary/30" : ""
                 }`}
               >
-                <CardHeader>
-                  <div className="flex items-center gap-3">
-                    <div className={`flex size-11 items-center justify-center rounded-xl transition-colors ${
-                      isJoined ? "bg-primary text-primary-foreground" : "bg-muted text-primary group-hover:bg-primary/10"
-                    }`}>
-                      <Building2 className="size-5" />
-                    </div>
-                    <div>
-                      <CardTitle className="text-base">{dept.name}</CardTitle>
-                      {isJoined && (
-                        <p className="text-xs text-primary font-medium mt-0.5">已加入</p>
-                      )}
-                    </div>
+                {/* Edit/Delete hover actions */}
+                {(canEdit || canDelete) && (
+                  <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10">
+                    {canEdit && (
+                      <button
+                        className="inline-flex size-7 items-center justify-center rounded-lg bg-background border border-border hover:bg-muted hover:border-primary/30 transition-colors cursor-pointer"
+                        title="编辑部门"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          handleEditOpen(dept)
+                        }}
+                      >
+                        <Pencil className="size-3.5 text-muted-foreground hover:text-foreground" />
+                      </button>
+                    )}
+                    {canDelete && (
+                      <button
+                        className="inline-flex size-7 items-center justify-center rounded-lg bg-background border border-border hover:bg-destructive/10 hover:border-destructive/30 transition-colors cursor-pointer"
+                        title="删除部门"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          handleDeleteOpen(dept)
+                        }}
+                      >
+                        <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />
+                      </button>
+                    )}
                   </div>
-                </CardHeader>
-                <CardContent className="flex-1">
-                  <CardDescription className="line-clamp-2">
-                    {dept.description || "暂无描述"}
-                  </CardDescription>
-                </CardContent>
-                <CardFooter>
-                  <Button
-                    variant={variant || "outline"}
-                    className="w-full gap-2"
-                    disabled={disabled}
-                    onClick={onClick}
-                  >
-                    {icon}
-                    {label}
-                  </Button>
-                </CardFooter>
+                )}
+
+                <Link href={`/dashboard/departments/${dept.id}`} className="flex flex-col flex-1">
+                  <CardHeader className="pr-16">
+                    <div className="flex items-center gap-3">
+                      <div className={`flex size-11 items-center justify-center rounded-xl transition-colors ${
+                        isJoined ? "bg-primary text-primary-foreground" : "bg-muted text-primary group-hover:bg-primary/10"
+                      }`}>
+                        <Building2 className="size-5" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-base group-hover:text-primary transition-colors">{dept.name}</CardTitle>
+                        {isJoined && (
+                          <p className="text-xs text-primary font-medium mt-0.5">已加入</p>
+                        )}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="flex-1">
+                    <CardDescription className="line-clamp-2">
+                      {dept.description || "暂无描述"}
+                    </CardDescription>
+                    {dept.max_members && (
+                      <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
+                        <Users className="size-3" />
+                        <span>上限 {dept.max_members} 人</span>
+                      </div>
+                    )}
+                  </CardContent>
+                  <CardFooter className="flex items-center gap-2">
+                    <Button
+                      variant={variant || "outline"}
+                      className="gap-2 flex-1"
+                      disabled={disabled}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        onClick?.()
+                      }}
+                    >
+                      {icon}
+                      {label}
+                    </Button>
+                    <Link
+                      href={`/dashboard/departments/${dept.id}`}
+                      className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent hover:bg-muted transition-colors"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ArrowRight className="size-4" />
+                    </Link>
+                  </CardFooter>
+                </Link>
               </Card>
             )
           })}
@@ -263,6 +427,77 @@ export default function DepartmentsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Department Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>编辑部门信息</DialogTitle>
+            <DialogDescription>
+              修改 {editingDept?.name} 的基本信息
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-name">部门名称 *</Label>
+              <Input
+                id="edit-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="输入部门名称"
+                disabled={editSubmitting}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-description">部门描述</Label>
+              <Textarea
+                id="edit-description"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                placeholder="输入部门描述"
+                rows={3}
+                disabled={editSubmitting}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-max-members">人数上限 *</Label>
+              <Input
+                id="edit-max-members"
+                type="number"
+                min="1"
+                value={editMaxMembers}
+                onChange={(e) => setEditMaxMembers(e.target.value)}
+                placeholder="50"
+                disabled={editSubmitting}
+              />
+            </div>
+            {editError && (
+              <p className="text-sm text-destructive">{editError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)} disabled={editSubmitting}>
+              取消
+            </Button>
+            <Button onClick={handleEditSubmit} disabled={editSubmitting || !editName.trim()}>
+              {editSubmitting ? "保存中..." : "保存修改"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirm Dialog */}
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        title="确认删除部门"
+        description={`确定要删除「${deletingDept?.name}」吗？该部门的所有成员将被移出，此操作不可撤销。`}
+        confirmLabel="确认删除"
+        cancelLabel="取消"
+        variant="destructive"
+        onConfirm={handleDeleteConfirm}
+        loading={deleteSubmitting}
+      />
     </div>
   )
 }
