@@ -27,6 +27,7 @@ import {
   ChevronLeft,
   Bell,
   Check,
+  Archive,
 } from "lucide-react"
 import type { User as SupabaseUser } from "@supabase/supabase-js"
 
@@ -48,6 +49,7 @@ const allNavigation = [
   { name: "活动管理", href: "/dashboard/activities", icon: Calendar, roles: ["admin", "minister", "member", "applicant"] },
   { name: "活动审批", href: "/dashboard/activities/approval", icon: Calendar, roles: ["admin", "minister"] },
   { name: "入部审核", href: "/dashboard/applications", icon: ClipboardList, roles: ["admin", "minister"] },
+  { name: "活动归档", href: "/dashboard/archive", icon: Archive, roles: ["admin", "minister", "member", "applicant"] },
 ]
 
 export default function DashboardLayout({
