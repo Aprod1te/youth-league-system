@@ -332,7 +332,7 @@ export default function DepartmentsPage() {
                   </div>
                 )}
 
-                <Link href={`/dashboard/departments/${dept.id}`} className="flex flex-col flex-1">
+                <div className="flex flex-col flex-1">
                   <CardHeader className="pr-16">
                     <div className="flex items-center gap-3">
                       <div className={`flex size-11 items-center justify-center rounded-xl transition-colors ${
@@ -376,12 +376,11 @@ export default function DepartmentsPage() {
                     <Link
                       href={`/dashboard/departments/${dept.id}`}
                       className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent hover:bg-muted transition-colors"
-                      onClick={(e) => e.stopPropagation()}
                     >
                       <ArrowRight className="size-4" />
                     </Link>
                   </CardFooter>
-                </Link>
+                </div>
               </Card>
             )
           })}
