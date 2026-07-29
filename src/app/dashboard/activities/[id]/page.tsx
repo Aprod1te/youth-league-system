@@ -11,7 +11,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { toast } from "@/components/ui/toast"
-import { ArrowLeft, MapPin, Calendar, User, DollarSign, Users, Upload, X, Download, ImagePlus, FileText } from "lucide-react"
+import { ArrowLeft, MapPin, Calendar, User, DollarSign, Users, Upload, X, Download, ImagePlus, FileText, CheckSquare } from "lucide-react"
+import { QRCodeSVG } from "qrcode.react"
 import type { User as SupabaseUser } from "@supabase/supabase-js"
 
 interface ActivityDetail {
@@ -95,7 +96,17 @@ export default function ActivityDetailPage() {
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const [lightboxSrc, setLightboxSrc] = useState("")
 
+  // Check-in state
+  const [myCheckin, setMyCheckin] = useState<{ id: string } | null>(null)
+  const [checkinCount, setCheckinCount] = useState(0)
+  const [checkinUsers, setCheckinUsers] = useState<Array<{ id: string; full_name: string | null }>>([])
+  const [checkinActionLoading, setCheckinActionLoading] = useState(false)
+
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
+  const [userRsvp, setUserRsvp] = useState<{ id: string; status: string } | null>(null)
+  const [rsvpCount, setRsvpCount] = useState(0)
+  const [rsvpUsers, setRsvpUsers] = useState<Array<{ id: string; full_name: string | null; status: string }>>([])
+  const [rsvpActionLoading, setRsvpActionLoading] = useState(false)
   const didFetch = useRef(false)
   const supabaseRef = useRef(createClient())
   const photoInputRef = useRef<HTMLInputElement>(null)
@@ -150,6 +161,47 @@ export default function ActivityDetailPage() {
           map[p.id] = p.full_name || p.id
         }
         setUserNameMap(map)
+
+        // Step 4: Fetch RSVPs for this activity
+        const { data: rsvpData } = await supabase
+          .from("activity_rsvps")
+          .select("id, user_id, status")
+          .eq("activity_id", activityId)
+
+        const rsvpList = (rsvpData || []) as Array<{ id: string; user_id: string; status: string }>
+        setRsvpCount(rsvpList.filter((r) => r.status === "registered").length)
+        setRsvpUsers(
+          rsvpList.map((r) => ({
+            id: r.user_id,
+            full_name: map[r.user_id] || r.user_id,
+            status: r.status,
+          }))
+        )
+
+        if (currentUser) {
+          const myRsvp = rsvpList.find((r) => r.user_id === currentUser.id)
+          setUserRsvp(myRsvp ? { id: myRsvp.id, status: myRsvp.status } : null)
+        }
+
+        // Step 5: Fetch check-in data for this activity
+        const { data: checkinData } = await supabase
+          .from("activity_checkins")
+          .select("id, user_id")
+          .eq("activity_id", activityId)
+
+        const checkinList = (checkinData || []) as Array<{ id: string; user_id: string }>
+        setCheckinCount(checkinList.length)
+        setCheckinUsers(
+          checkinList.map((c) => ({
+            id: c.user_id,
+            full_name: map[c.user_id] || c.user_id,
+          }))
+        )
+
+        if (currentUser) {
+          const myC = checkinList.find((c) => c.user_id === currentUser.id)
+          setMyCheckin(myC ? { id: myC.id } : null)
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败")
       } finally {
@@ -368,6 +420,106 @@ export default function ActivityDetailPage() {
     }
   }
 
+  const handleRegister = async () => {
+    if (!user || !activity) return
+    setRsvpActionLoading(true)
+    const supabase = supabaseRef.current
+
+    if (userRsvp && userRsvp.status === "cancelled") {
+      // Re-register: update the existing cancelled RSVP
+      const { error } = await supabase
+        .from("activity_rsvps")
+        .update({ status: "registered" })
+        .eq("id", userRsvp.id)
+
+      if (error) {
+        toast.add({ type: "error", title: "报名失败", description: error.message })
+        setRsvpActionLoading(false)
+        return
+      }
+
+      toast.add({ type: "success", title: "报名成功" })
+      setUserRsvp({ id: userRsvp.id, status: "registered" })
+      setRsvpCount((prev) => prev + 1)
+      setRsvpUsers((prev) =>
+        prev.map((u) => (u.id === user!.id ? { ...u, status: "registered" } : u))
+      )
+    } else {
+      // New registration
+      const { data, error } = await supabase
+        .from("activity_rsvps")
+        .insert({ activity_id: activity.id, user_id: user.id, status: "registered" })
+        .select()
+        .single()
+
+      if (error) {
+        toast.add({ type: "error", title: "报名失败", description: error.message })
+        setRsvpActionLoading(false)
+        return
+      }
+
+      toast.add({ type: "success", title: "报名成功" })
+      setUserRsvp({ id: data.id, status: "registered" })
+      setRsvpCount((prev) => prev + 1)
+      setRsvpUsers((prev) => [
+        ...prev,
+        { id: user!.id, full_name: userNameMap[user!.id] || user!.id, status: "registered" },
+      ])
+    }
+
+    setRsvpActionLoading(false)
+  }
+
+  const handleCancelRegistration = async () => {
+    if (!userRsvp) return
+    setRsvpActionLoading(true)
+    const supabase = supabaseRef.current
+
+    const { error } = await supabase
+      .from("activity_rsvps")
+      .update({ status: "cancelled" })
+      .eq("id", userRsvp.id)
+
+    if (error) {
+      toast.add({ type: "error", title: "取消报名失败", description: error.message })
+      setRsvpActionLoading(false)
+      return
+    }
+
+    toast.add({ type: "success", title: "已取消报名" })
+    setUserRsvp((prev) => (prev ? { ...prev, status: "cancelled" } : null))
+    setRsvpCount((prev) => Math.max(0, prev - 1))
+    setRsvpUsers((prev) =>
+      prev.map((u) => (u.id === user!.id ? { ...u, status: "cancelled" } : u))
+    )
+    setRsvpActionLoading(false)
+  }
+
+  const handleCheckin = async () => {
+    if (!user || !activity) return
+    setCheckinActionLoading(true)
+    const supabase = supabaseRef.current
+
+    const { error } = await supabase
+      .from("activity_checkins")
+      .insert({ activity_id: activity.id, user_id: user.id })
+
+    if (error) {
+      toast.add({ type: "error", title: "签到失败", description: error.message })
+      setCheckinActionLoading(false)
+      return
+    }
+
+    toast.add({ type: "success", title: "签到成功" })
+    setMyCheckin({ id: "temp" })
+    setCheckinCount((prev) => prev + 1)
+    setCheckinUsers((prev) => [
+      ...prev,
+      { id: user.id, full_name: userNameMap[user.id] || user.id },
+    ])
+    setCheckinActionLoading(false)
+  }
+
   const showSummarySection = activity && activity.status === "completed"
   const hasSummary = activityReport?.summary && activityReport.summary.trim().length > 0
 
@@ -473,6 +625,149 @@ export default function ActivityDetailPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Registration Section */}
+          {activity && activity.status !== "draft" && activity.status !== "rejected" && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="size-5"
+                  >
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                  </svg>
+                  活动报名
+                </CardTitle>
+                <CardDescription>
+                  当前报名 {rsvpCount} 人
+                  {activity.max_participants != null &&
+                    ` / 上限 ${activity.max_participants} 人`}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm">
+                    {userRsvp?.status === "registered" ? (
+                      <span className="font-medium text-green-600">✓ 已报名</span>
+                    ) : userRsvp?.status === "cancelled" ? (
+                      <span className="text-muted-foreground">已取消报名</span>
+                    ) : (
+                      <span className="text-muted-foreground">尚未报名</span>
+                    )}
+                  </div>
+
+                  {activity.status === "approved" ? (
+                    userRsvp?.status === "registered" ? (
+                      <Button variant="outline" size="sm" onClick={handleCancelRegistration} disabled={rsvpActionLoading}>
+                        {rsvpActionLoading ? "处理中..." : "取消报名"}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        onClick={handleRegister}
+                        disabled={
+                          rsvpActionLoading ||
+                          (activity.max_participants != null && rsvpCount >= activity.max_participants)
+                        }
+                      >
+                        {rsvpActionLoading
+                          ? "处理中..."
+                          : userRsvp?.status === "cancelled"
+                            ? "重新报名"
+                            : "报名参加"}
+                      </Button>
+                    )
+                  ) : activity.status === "pending_approval" ? (
+                    <p className="text-xs text-muted-foreground">活动审批通过后即可报名</p>
+                  ) : null}
+                </div>
+
+                {/* Registered users list */}
+                {rsvpUsers.filter((u) => u.status === "registered").length > 0 && (
+                  <div>
+                    <h4 className="mb-2 text-sm font-medium text-muted-foreground">
+                      已报名人员
+                    </h4>
+                    <div className="flex flex-wrap gap-2">
+                      {rsvpUsers
+                        .filter((u) => u.status === "registered")
+                        .map((u) => (
+                          <Badge key={u.id} variant="secondary">
+                            {u.full_name}
+                          </Badge>
+                        ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Check-in Section */}
+          {activity && activity.status === "approved" && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <CheckSquare className="size-5" />
+                  活动签到
+                </CardTitle>
+                <CardDescription>
+                  已签到 {checkinCount} 人
+                  {activity.max_participants != null &&
+                    ` / 已报名 ${Math.min(rsvpCount, activity.max_participants)} 人`}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm">
+                    {myCheckin ? (
+                      <span className="font-medium text-green-600">✓ 已签到</span>
+                    ) : (
+                      <span className="text-muted-foreground">尚未签到</span>
+                    )}
+                  </div>
+
+                  {user && (
+                    myCheckin ? (
+                      <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">
+                        已签到
+                      </Badge>
+                    ) : (
+                      <Button size="sm" onClick={handleCheckin} disabled={checkinActionLoading}>
+                        {checkinActionLoading ? "签到中..." : "签到"}
+                      </Button>
+                    )
+                  )}
+                </div>
+
+                {/* Checked-in users list */}
+                {checkinUsers.length > 0 && (
+                  <div>
+                    <h4 className="mb-2 text-sm font-medium text-muted-foreground">
+                      已签到人员
+                    </h4>
+                    <div className="flex flex-wrap gap-2">
+                      {checkinUsers.map((u) => (
+                        <Badge key={u.id} variant="secondary">
+                          {u.full_name || u.id}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* Activity Summary Section (already submitted) */}
           {hasSummary && (

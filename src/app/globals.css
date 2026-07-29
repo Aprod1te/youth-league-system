@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+@layer theme, base, components, utilities;
+
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

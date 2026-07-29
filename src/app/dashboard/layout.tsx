@@ -27,6 +27,8 @@ import {
   ChevronLeft,
   Bell,
   Archive,
+  CheckSquare,
+  FileSpreadsheet,
 } from "lucide-react"
 import type { User as SupabaseUser } from "@supabase/supabase-js"
 
@@ -41,20 +43,24 @@ interface Notification {
 }
 
 const allNavigation = [
-  { name: "工作台", href: "/dashboard", icon: LayoutDashboard, roles: ["admin", "minister", "member", "applicant"] },
-  { name: "部门管理", href: "/dashboard/departments", icon: Building2, roles: ["admin", "minister", "member", "applicant"] },
-  { name: "人员管理", href: "/dashboard/members", icon: Users, roles: ["admin", "minister", "member"] },
-  { name: "任务管理", href: "/dashboard/tasks", icon: ClipboardList, roles: ["admin", "minister", "member"] },
-  { name: "活动管理", href: "/dashboard/activities", icon: Calendar, roles: ["admin", "minister", "member", "applicant"] },
-  { name: "活动审批", href: "/dashboard/activities/approval", icon: Calendar, roles: ["admin", "minister"] },
-  { name: "入部审核", href: "/dashboard/applications", icon: ClipboardList, roles: ["admin", "minister"] },
-  { name: "活动归档", href: "/dashboard/archive", icon: Archive, roles: ["admin", "minister", "member", "applicant"] },
+  { name: "工作台", href: "/dashboard", icon: LayoutDashboard, roles: ["admin", "minister", "secretary", "member", "applicant"] },
+  { name: "部门管理", href: "/dashboard/departments", icon: Building2, roles: ["admin", "minister", "secretary", "member", "applicant"] },
+  { name: "人员管理", href: "/dashboard/members", icon: Users, roles: ["admin", "minister", "secretary", "member"] },
+  { name: "任务管理", href: "/dashboard/tasks", icon: ClipboardList, roles: ["admin", "minister", "secretary", "member"] },
+  { name: "任务审批", href: "/dashboard/tasks/approval", icon: CheckSquare, roles: ["admin", "secretary"] },
+  { name: "活动管理", href: "/dashboard/activities", icon: Calendar, roles: ["admin", "minister", "secretary", "member", "applicant"] },
+  { name: "活动审批", href: "/dashboard/activities/approval", icon: Calendar, roles: ["admin", "minister", "secretary"] },
+  { name: "入部审核", href: "/dashboard/applications", icon: ClipboardList, roles: ["admin", "minister", "secretary"] },
+  { name: "活动归档", href: "/dashboard/archive", icon: Archive, roles: ["admin", "minister", "secretary", "member", "applicant"] },
+  { name: "审核汇总", href: "/dashboard/review", icon: FileSpreadsheet, roles: ["admin", "secretary"] },
 ]
 
 const roleLabel: Record<string, string> = {
   admin: "管理员",
   minister: "部长",
+  secretary: "团委书记",
   member: "成员",
+  officer: "干事",
   applicant: "申请者",
 }
 

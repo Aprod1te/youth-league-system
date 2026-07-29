@@ -21,21 +21,27 @@ const roleOptions = [
   { value: "all", label: "全部" },
   { value: "admin", label: "管理员" },
   { value: "minister", label: "部长" },
+  { value: "secretary", label: "团委书记" },
   { value: "officer", label: "干事" },
+  { value: "member", label: "成员" },
   { value: "applicant", label: "申请人" },
 ]
 
 const roleBadgeVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   admin: "default",
   minister: "secondary",
+  secretary: "default",
   officer: "outline",
+  member: "secondary",
   applicant: "destructive",
 }
 
 const roleLabel: Record<string, string> = {
   admin: "管理员",
   minister: "部长",
+  secretary: "团委书记",
   officer: "干事",
+  member: "成员",
   applicant: "申请人",
 }
 
