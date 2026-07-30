@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
@@ -151,6 +152,7 @@ export default function MembersPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>姓名</TableHead>
+                <TableHead>头像</TableHead>
                 <TableHead>学号</TableHead>
                 <TableHead>部门</TableHead>
                 <TableHead>角色</TableHead>
@@ -162,6 +164,13 @@ export default function MembersPage() {
                 <TableRow key={profile.id}>
                   <TableCell className="font-medium">
                     {profile.full_name || "-"}
+                  </TableCell>
+                  <TableCell>
+                    <Avatar size="sm">
+                      <AvatarFallback>
+                        {(profile.full_name || "-").charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
                   </TableCell>
                   <TableCell>{profile.student_id || "-"}</TableCell>
                   <TableCell>
