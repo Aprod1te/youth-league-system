@@ -13,7 +13,7 @@ import { toast } from "@/components/ui/toast"
 import { PageHeader } from "@/components/ui/page-header"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
-import { Building2, Users, CheckCircle2, Clock3, Pencil, Trash2, ArrowRight } from "lucide-react"
+import { Building2, Users, CheckCircle2, Clock3, Pencil, Trash2, ArrowRight, Search, X } from "lucide-react"
 import type { User } from "@supabase/supabase-js"
 
 interface Department {
@@ -44,6 +44,9 @@ export default function DepartmentsPage() {
   const [editMaxMembers, setEditMaxMembers] = useState("")
   const [editSubmitting, setEditSubmitting] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("")
 
   // Delete state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -273,6 +276,25 @@ export default function DepartmentsPage() {
         description="浏览和管理团委各部门，申请加入感兴趣的部门"
       />
 
+      {/* Search Bar */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+        <Input
+          placeholder="搜索部门名称..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-9 pr-9"
+        />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery("")}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <X className="size-4" />
+          </button>
+        )}
+      </div>
+
       {error ? (
         <Card className="border-destructive/50">
           <CardContent className="py-12 text-center">
@@ -286,106 +308,127 @@ export default function DepartmentsPage() {
           title="暂无部门数据"
           description="系统还没有创建任何部门"
         />
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {uniqueDepartments.map((dept) => {
-            const { label, disabled, variant, icon, onClick } = getButtonState(dept.id)
-            const isJoined = userDepartmentId === dept.id
-            const canEdit = userRole === "admin" || (userRole === "minister" && isMinisterOf(dept.id))
-            const canDelete = userRole === "admin"
-            return (
-              <Card
-                key={dept.id}
-                className={`group hover:shadow-md transition-all duration-150 hover:border-primary/20 flex flex-col relative ${
-                  isJoined ? "ring-1 ring-primary/30" : ""
-                }`}
-              >
-                {/* Edit/Delete hover actions */}
-                {(canEdit || canDelete) && (
-                  <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10">
-                    {canEdit && (
-                      <button
-                        className="inline-flex size-7 items-center justify-center rounded-lg bg-background border border-border hover:bg-muted hover:border-primary/30 transition-colors cursor-pointer"
-                        title="编辑部门"
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          handleEditOpen(dept)
-                        }}
-                      >
-                        <Pencil className="size-3.5 text-muted-foreground hover:text-foreground" />
-                      </button>
-                    )}
-                    {canDelete && (
-                      <button
-                        className="inline-flex size-7 items-center justify-center rounded-lg bg-background border border-border hover:bg-destructive/10 hover:border-destructive/30 transition-colors cursor-pointer"
-                        title="删除部门"
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          handleDeleteOpen(dept)
-                        }}
-                      >
-                        <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />
-                      </button>
-                    )}
-                  </div>
-                )}
+      ) : (() => {
+        const filteredDepartments = uniqueDepartments.filter((dept) => {
+          if (!searchQuery.trim()) return true
+          const q = searchQuery.trim().toLowerCase()
+          return (
+            dept.name.toLowerCase().includes(q) ||
+            (dept.description && dept.description.toLowerCase().includes(q))
+          )
+        })
 
-                <div className="flex flex-col flex-1">
-                  <CardHeader className="pr-16">
-                    <div className="flex items-center gap-3">
-                      <div className={`flex size-11 items-center justify-center rounded-xl transition-colors ${
-                        isJoined ? "bg-primary text-primary-foreground" : "bg-muted text-primary group-hover:bg-primary/10"
-                      }`}>
-                        <Building2 className="size-5" />
-                      </div>
-                      <div>
-                        <CardTitle className="text-base group-hover:text-primary transition-colors">{dept.name}</CardTitle>
-                        {isJoined && (
-                          <p className="text-xs text-primary font-medium mt-0.5">已加入</p>
-                        )}
-                      </div>
+        if (filteredDepartments.length === 0) {
+          return (
+            <EmptyState
+              icon={<Search className="size-12" />}
+              title="未找到匹配的部门"
+              description={`没有部门名称或描述包含"${searchQuery}"`}
+            />
+          )
+        }
+
+        return (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {filteredDepartments.map((dept) => {
+              const { label, disabled, variant, icon, onClick } = getButtonState(dept.id)
+              const isJoined = userDepartmentId === dept.id
+              const canEdit = userRole === "admin" || (userRole === "minister" && isMinisterOf(dept.id))
+              const canDelete = userRole === "admin"
+              return (
+                <Card
+                  key={dept.id}
+                  className={`group hover:shadow-md transition-all duration-150 hover:border-primary/20 flex flex-col relative ${
+                    isJoined ? "ring-1 ring-primary/30" : ""
+                  }`}
+                >
+                  {/* Edit/Delete hover actions */}
+                  {(canEdit || canDelete) && (
+                    <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10">
+                      {canEdit && (
+                        <button
+                          className="inline-flex size-7 items-center justify-center rounded-lg bg-background border border-border hover:bg-muted hover:border-primary/30 transition-colors cursor-pointer"
+                          title="编辑部门"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            handleEditOpen(dept)
+                          }}
+                        >
+                          <Pencil className="size-3.5 text-muted-foreground hover:text-foreground" />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          className="inline-flex size-7 items-center justify-center rounded-lg bg-background border border-border hover:bg-destructive/10 hover:border-destructive/30 transition-colors cursor-pointer"
+                          title="删除部门"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            handleDeleteOpen(dept)
+                          }}
+                        >
+                          <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />
+                        </button>
+                      )}
                     </div>
-                  </CardHeader>
-                  <CardContent className="flex-1">
-                    <CardDescription className="line-clamp-2">
-                      {dept.description || "暂无描述"}
-                    </CardDescription>
-                    {dept.max_members && (
-                      <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
-                        <Users className="size-3" />
-                        <span>上限 {dept.max_members} 人</span>
+                  )}
+
+                  <div className="flex flex-col flex-1">
+                    <CardHeader className="pr-16">
+                      <div className="flex items-center gap-3">
+                        <div className={`flex size-11 items-center justify-center rounded-xl transition-colors ${
+                          isJoined ? "bg-primary text-primary-foreground" : "bg-muted text-primary group-hover:bg-primary/10"
+                        }`}>
+                          <Building2 className="size-5" />
+                        </div>
+                        <div>
+                          <CardTitle className="text-base group-hover:text-primary transition-colors">{dept.name}</CardTitle>
+                          {isJoined && (
+                            <p className="text-xs text-primary font-medium mt-0.5">已加入</p>
+                          )}
+                        </div>
                       </div>
-                    )}
-                  </CardContent>
-                  <CardFooter className="flex items-center gap-2">
-                    <Button
-                      variant={variant || "outline"}
-                      className="gap-2 flex-1"
-                      disabled={disabled}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        onClick?.()
-                      }}
-                    >
-                      {icon}
-                      {label}
-                    </Button>
-                    <Link
-                      href={`/dashboard/departments/${dept.id}`}
-                      className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent hover:bg-muted transition-colors"
-                    >
-                      <ArrowRight className="size-4" />
-                    </Link>
-                  </CardFooter>
-                </div>
-              </Card>
-            )
-          })}
-        </div>
-      )}
+                    </CardHeader>
+                    <CardContent className="flex-1">
+                      <CardDescription className="line-clamp-2">
+                        {dept.description || "暂无描述"}
+                      </CardDescription>
+                      {dept.max_members && (
+                        <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
+                          <Users className="size-3" />
+                          <span>上限 {dept.max_members} 人</span>
+                        </div>
+                      )}
+                    </CardContent>
+                    <CardFooter className="flex items-center gap-2">
+                      <Button
+                        variant={variant || "outline"}
+                        className="gap-2 flex-1"
+                        disabled={disabled}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          onClick?.()
+                        }}
+                      >
+                        {icon}
+                        {label}
+                      </Button>
+                      <Link
+                        href={`/dashboard/departments/${dept.id}`}
+                        className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent hover:bg-muted transition-colors"
+                      >
+                        <ArrowRight className="size-4" />
+                      </Link>
+                    </CardFooter>
+                  </div>
+                </Card>
+              )
+            })}
+          </div>
+        )
+      })()}
 
       {/* Apply Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
