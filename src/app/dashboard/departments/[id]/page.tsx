@@ -18,6 +18,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Textarea } from "@/components/ui/textarea"
+import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
 import {
   ArrowLeft,
   Building2,
@@ -29,6 +33,7 @@ import {
   FileText,
   Clock,
   ExternalLink,
+  Pencil,
 } from "lucide-react"
 import type { User } from "@supabase/supabase-js"
 
@@ -70,6 +75,14 @@ export default function DepartmentDetailPage({
   const [user, setUser] = useState<User | null>(null)
   const [userRole, setUserRole] = useState<string>("applicant")
   const [userDepartmentId, setUserDepartmentId] = useState<string | null>(null)
+
+  // Edit department
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [editName, setEditName] = useState("")
+  const [editDescription, setEditDescription] = useState("")
+  const [editMaxMembers, setEditMaxMembers] = useState("")
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
 
   // Remove member
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false)
@@ -225,6 +238,52 @@ export default function DepartmentDetailPage({
     setPromoteLoading(false)
   }
 
+  // Edit department
+  const handleEditOpen = () => {
+    if (!department) return
+    setEditName(department.name)
+    setEditDescription(department.description || "")
+    setEditMaxMembers(department.max_members?.toString() || "50")
+    setEditError(null)
+    setEditDialogOpen(true)
+  }
+
+  const handleEditSubmit = async () => {
+    if (!department) return
+    if (!editName.trim()) {
+      setEditError("部门名称不能为空")
+      return
+    }
+    const maxMembersNum = parseInt(editMaxMembers)
+    if (!editMaxMembers || isNaN(maxMembersNum) || maxMembersNum <= 0) {
+      setEditError("人数上限必须为正整数")
+      return
+    }
+
+    setEditSubmitting(true)
+    setEditError(null)
+    const supabase = supabaseRef.current
+    const { error } = await supabase
+      .from("departments")
+      .update({
+        name: editName.trim(),
+        description: editDescription.trim() || null,
+        max_members: maxMembersNum,
+      })
+      .eq("id", department.id)
+
+    if (error) {
+      setEditError(error.message)
+    } else {
+      setDepartment((prev) =>
+        prev ? { ...prev, name: editName.trim(), description: editDescription.trim() || null, max_members: maxMembersNum } : prev
+      )
+      toast.add({ type: "success", title: "更新成功", description: "部门信息已更新" })
+      setEditDialogOpen(false)
+    }
+    setEditSubmitting(false)
+  }
+
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return "-"
     return new Date(dateStr).toLocaleDateString("zh-CN", {
@@ -304,12 +363,20 @@ export default function DepartmentDetailPage({
           { label: department.name },
         ]}
         actions={
-          <Link href="/dashboard/departments">
-            <Button variant="outline" size="default" className="gap-2">
-              <ArrowLeft className="size-4" />
-              返回
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            {canManage && (
+              <Button variant="outline" size="default" className="gap-2" onClick={handleEditOpen}>
+                <Pencil className="size-4" />
+                编辑部门
+              </Button>
+            )}
+            <Link href="/dashboard/departments">
+              <Button variant="outline" size="default" className="gap-2">
+                <ArrowLeft className="size-4" />
+                返回
+              </Button>
+            </Link>
+          </div>
         }
       />
 
@@ -554,6 +621,37 @@ export default function DepartmentDetailPage({
         onConfirm={handlePromoteConfirm}
         loading={promoteLoading}
       />
+
+      {/* Edit Department Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={(open) => { setEditDialogOpen(open); if (!open) setEditError(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>编辑部门</DialogTitle>
+            <DialogDescription>修改部门的基本信息。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-name">部门名称</Label>
+              <Input id="edit-name" value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="请输入部门名称" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-description">部门描述</Label>
+              <Textarea id="edit-description" value={editDescription} onChange={(e) => setEditDescription(e.target.value)} placeholder="请输入部门描述（选填）" rows={3} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-max-members">人数上限</Label>
+              <Input id="edit-max-members" type="number" value={editMaxMembers} onChange={(e) => setEditMaxMembers(e.target.value)} placeholder="请输入人数上限" min={1} />
+            </div>
+            {editError && (
+              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{editError}</div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setEditDialogOpen(false); setEditError(null) }} disabled={editSubmitting}>取消</Button>
+            <Button onClick={handleEditSubmit} disabled={editSubmitting}>{editSubmitting ? '保存中...' : '保存'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
