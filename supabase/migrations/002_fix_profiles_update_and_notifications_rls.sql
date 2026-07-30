@@ -1,4 +1,4 @@
-n p-- Fix profiles UPDATE RLS: Allow minister and admin to update any profile
+-- Fix profiles UPDATE RLS: Allow minister and admin to update any profile
 -- (Needed for application approval: updating applicant's department_id and role)
 
 -- Allow users to update their own profile
