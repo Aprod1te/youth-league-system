@@ -2,10 +2,11 @@
 
 import { useEffect, useState, useRef, useCallback } from "react"
 import { useRouter } from "next/navigation"
+import Image from "next/image"
 import { createClient } from "@/lib/supabase/client"
+import { getStringArray, isExternalFileUrl } from "@/lib/files"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
   Select,
   SelectContent,
@@ -22,13 +23,13 @@ interface ActivityArchiveItem {
   status: string
   department_id: string | null
   end_time: string | null
-  created_at: string
+  created_at: string | null
   reports: {
     summary: string | null
     photos: string[] | null
     participant_count: number | null
     submitted_by: string
-    created_at: string
+    created_at: string | null
   } | null
 }
 
@@ -71,18 +72,47 @@ export default function ArchivePage() {
           return
         }
 
-        const mapped: ActivityArchiveItem[] = ((activitiesData || []) as unknown as any[]).map(
-          (a: any) => ({
-            id: a.id,
-            title: a.title,
-            status: a.status,
-            department_id: a.department_id,
-            end_time: a.end_time,
-            created_at: a.created_at,
-            reports:
-              a.activity_reports && a.activity_reports.length > 0
-                ? a.activity_reports[a.activity_reports.length - 1]
-                : null,
+        const mapped: ActivityArchiveItem[] = await Promise.all(
+          (activitiesData || []).map(async (activity) => {
+            const report = activity.activity_reports
+            if (!report) {
+              return {
+                id: activity.id,
+                title: activity.title,
+                status: activity.status,
+                department_id: activity.department_id,
+                end_time: activity.end_time,
+                created_at: activity.created_at,
+                reports: null,
+              }
+            }
+
+            const photoPaths = getStringArray(report.photos)
+            const photos = await Promise.all(
+              photoPaths.map(async (path) => {
+                if (isExternalFileUrl(path)) return path
+                const { data } = await supabase.storage
+                  .from("activity-photos")
+                  .createSignedUrl(path, 3600)
+                return data?.signedUrl ?? null
+              })
+            )
+
+            return {
+              id: activity.id,
+              title: activity.title,
+              status: activity.status,
+              department_id: activity.department_id,
+              end_time: activity.end_time,
+              created_at: activity.created_at,
+              reports: {
+                summary: report.summary,
+                photos: photos.filter((url): url is string => url !== null),
+                participant_count: report.participant_count,
+                submitted_by: report.submitted_by,
+                created_at: report.created_at,
+              },
+            }
           })
         )
 
@@ -138,21 +168,21 @@ export default function ArchivePage() {
     .sort((a, b) => {
       switch (sortBy as SortOption) {
         case "oldest":
-          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
         case "participants_desc":
           return (b.reports?.participant_count || 0) - (a.reports?.participant_count || 0)
         case "participants_asc":
           return (a.reports?.participant_count || 0) - (b.reports?.participant_count || 0)
         case "newest":
         default:
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
       }
     })
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">活动归档</h1>
+        <h1 className="text-2xl font-bold">活动归档</h1>
         <p className="text-sm text-muted-foreground mt-1">查看所有已完成的活动记录和总结</p>
       </div>
 
@@ -243,10 +273,13 @@ export default function ArchivePage() {
                           key={idx}
                           className="relative aspect-square w-16 rounded-md border overflow-hidden shrink-0"
                         >
-                          <img
+                          <Image
                             src={url}
                             alt={`${item.title} 照片 ${idx + 1}`}
-                            className="w-full h-full object-cover"
+                            fill
+                            sizes="64px"
+                            unoptimized
+                            className="object-cover"
                           />
                         </div>
                       ))}

@@ -45,6 +45,9 @@ export type Database = {
           approval_note: string | null
           approved_by: string | null
           budget: number | null
+          checkin_closes_at: string | null
+          checkin_opens_at: string | null
+          checkin_token_hash: string | null
           created_at: string | null
           department_id: string | null
           description: string | null
@@ -63,6 +66,9 @@ export type Database = {
           approval_note?: string | null
           approved_by?: string | null
           budget?: number | null
+          checkin_closes_at?: string | null
+          checkin_opens_at?: string | null
+          checkin_token_hash?: string | null
           created_at?: string | null
           department_id?: string | null
           description?: string | null
@@ -81,6 +87,9 @@ export type Database = {
           approval_note?: string | null
           approved_by?: string | null
           budget?: number | null
+          checkin_closes_at?: string | null
+          checkin_opens_at?: string | null
+          checkin_token_hash?: string | null
           created_at?: string | null
           department_id?: string | null
           description?: string | null
@@ -502,7 +511,136 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      apply_to_department: {
+        Args: { p_department_id: string; p_reason: string }
+        Returns: string
+      }
+      cancel_activity_registration: {
+        Args: { p_activity_id: string }
+        Returns: undefined
+      }
+      check_in_activity: {
+        Args: { p_activity_id: string; p_token: string }
+        Returns: string
+      }
+      close_activity_checkin: {
+        Args: { p_activity_id: string }
+        Returns: undefined
+      }
+      create_activity: {
+        Args: {
+          p_budget?: number | null
+          p_description?: string | null
+          p_end_time?: string | null
+          p_location?: string | null
+          p_max_participants?: number | null
+          p_start_time?: string | null
+          p_title: string
+        }
+        Returns: string
+      }
+      create_department: {
+        Args: {
+          p_description?: string | null
+          p_max_members?: number
+          p_name: string
+        }
+        Returns: string
+      }
+      create_task: {
+        Args: {
+          p_assigned_to?: string | null
+          p_deadline?: string | null
+          p_department_id?: string | null
+          p_description?: string | null
+          p_priority?: string
+          p_title: string
+        }
+        Returns: string
+      }
+      delete_department: {
+        Args: { p_department_id: string }
+        Returns: undefined
+      }
+      get_activity_participation_counts: {
+        Args: { p_activity_id: string }
+        Returns: {
+          checkin_count: number
+          registered_count: number
+        }[]
+      }
+      open_activity_checkin: {
+        Args: { p_activity_id: string; p_duration_minutes?: number }
+        Returns: string
+      }
+      promote_department_minister: {
+        Args: { p_department_id: string; p_user_id: string }
+        Returns: undefined
+      }
+      register_activity: {
+        Args: { p_activity_id: string }
+        Returns: string
+      }
+      remove_department_member: {
+        Args: { p_department_id: string; p_user_id: string }
+        Returns: undefined
+      }
+      review_activity: {
+        Args: {
+          p_activity_id: string
+          p_decision: string
+          p_note?: string | null
+        }
+        Returns: undefined
+      }
+      review_application: {
+        Args: {
+          p_application_id: string
+          p_decision: string
+          p_note?: string | null
+        }
+        Returns: undefined
+      }
+      review_task: {
+        Args: { p_decision: string; p_note?: string | null; p_task_id: string }
+        Returns: undefined
+      }
+      set_activity_lifecycle_status: {
+        Args: { p_activity_id: string; p_status: string }
+        Returns: undefined
+      }
+      submit_activity_for_approval: {
+        Args: { p_activity_id: string }
+        Returns: undefined
+      }
+      submit_activity_report: {
+        Args: {
+          p_activity_id: string
+          p_attachments?: Json
+          p_participant_count?: number
+          p_photos?: Json
+          p_summary: string
+        }
+        Returns: string
+      }
+      submit_task: {
+        Args: {
+          p_attachments?: Json
+          p_content: string
+          p_progress?: number
+          p_task_id: string
+        }
+        Returns: string
+      }
+      update_department: {
+        Args: {
+          p_department_id: string
+          p_description?: string | null
+          p_max_members?: number
+          p_name: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never

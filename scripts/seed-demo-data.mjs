@@ -3,20 +3,29 @@
 /**
  * Demo 数据种子脚本
  * 
- * 前提：项目数据已清理干净，仅保留 haidencyrilyang@163.com 管理员账号
+ * 前提：目标项目已完成迁移，并存在指定的管理员账号
  * 
  * 功能：
- * 1. 替换 departments 为完整的 19 个部门
+ * 1. 幂等写入 19 个部门
  * 2. 创建模拟用户（部长/秘书/干事/申请人）
  * 3. 创建对应的 profile 记录
  * 
- * 使用方式: node scripts/seed-demo-data.mjs
+ * 使用方式:
+ *   node scripts/seed-demo-data.mjs --yes --project-ref=local
+ *
+ * Required .env.local values:
+ *   NEXT_PUBLIC_SUPABASE_URL
+ *   SUPABASE_SERVICE_ROLE_KEY
+ *   DEMO_SEED_ADMIN_EMAIL
+ *
+ * Optional .env.local value (defaults to local only):
+ *   DEMO_SEED_ALLOWED_PROJECT_REFS=local
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { readFileSync } from 'fs';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -40,12 +49,60 @@ function loadEnv() {
   return env;
 }
 
-const env = loadEnv();
+function getOption(name) {
+  const prefix = `${name}=`;
+  const inline = process.argv.find((argument) => argument.startsWith(prefix));
+  if (inline) return inline.slice(prefix.length);
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+function projectRefFromUrl(url) {
+  const hostname = new URL(url).hostname;
+  if (hostname === 'localhost' || hostname === '127.0.0.1') return 'local';
+  return hostname.endsWith('.supabase.co') ? hostname.split('.')[0] : null;
+}
+
+async function listAllUsers(supabase) {
+  const users = [];
+  const perPage = 1000;
+  for (let page = 1; ; page += 1) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
+    if (error) throw new Error(`查询用户列表失败: ${error.message}`);
+    users.push(...data.users);
+    if (data.users.length < perPage) return users;
+  }
+}
+
+const env = { ...loadEnv(), ...process.env };
 const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
+const adminEmail = env.DEMO_SEED_ADMIN_EMAIL?.trim().toLowerCase();
+const allowedRefs = new Set(
+  (env.DEMO_SEED_ALLOWED_PROJECT_REFS || 'local')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
+const actualProjectRef = supabaseUrl ? projectRefFromUrl(supabaseUrl) : null;
+const confirmedProjectRef = getOption('--project-ref');
 
-const ADMIN_USER_ID = 'bcffc24c-5ce3-41b4-aeb8-3c0f7a0a13e6';
-const ADMIN_EMAIL = 'haidencyrilyang@163.com';
+if (!process.argv.includes('--yes')) {
+  console.error('拒绝执行：必须显式传入 --yes。');
+  process.exit(1);
+}
+if (!supabaseUrl || !serviceRoleKey || !adminEmail) {
+  console.error('缺少 URL、service role key 或 DEMO_SEED_ADMIN_EMAIL。');
+  process.exit(1);
+}
+if (!actualProjectRef || confirmedProjectRef !== actualProjectRef) {
+  console.error('拒绝执行：--project-ref 与目标 URL 不匹配。');
+  process.exit(1);
+}
+if (!allowedRefs.has(actualProjectRef)) {
+  console.error('拒绝执行：目标项目不在 DEMO_SEED_ALLOWED_PROJECT_REFS 中。');
+  process.exit(1);
+}
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -108,45 +165,32 @@ const DEMO_USERS = [
 ];
 
 async function main() {
+  const existingUsers = await listAllUsers(supabase);
+  const adminUser = existingUsers.find(
+    (user) => user.email?.trim().toLowerCase() === adminEmail,
+  );
+  if (!adminUser) {
+    throw new Error('未找到指定管理员账号，未写入任何 Demo 数据。');
+  }
+
+  console.log(`目标项目: ${actualProjectRef}`);
+  console.log(`管理员账号: ${adminEmail}`);
   console.log('🚀 开始生成 Demo 数据\n');
 
   // ============================================================
-  // 第一步：重新部署 departments
+  // 第一步：幂等写入 departments
   // ============================================================
   console.log('📦 第一步：更新 departments...');
 
-  // 先把管理员 profile 的 department_id 置空，避免 FK 冲突
-  const { error: clearDeptError } = await supabase
-    .from('profiles')
-    .update({ department_id: null })
-    .eq('id', ADMIN_USER_ID);
-  if (clearDeptError) {
-    console.error('❌ 清除管理员部门关联失败:', clearDeptError.message);
-    process.exit(1);
-  }
-  console.log('   ✅ 已解除管理员的部门关联');
-
-  // 删除旧 departments
-  const { error: deleteDeptError } = await supabase
-    .from('departments')
-    .delete()
-    .neq('id', '00000000-0000-0000-0000-000000000000');
-  if (deleteDeptError) {
-    console.error('❌ 删除旧部门失败:', deleteDeptError.message);
-    process.exit(1);
-  }
-  console.log('   ✅ 已删除旧部门');
-
-  // 插入 19 个新部门
+  // 保留已有部门及其外键关系，仅按名称插入或更新标准部门。
   const { data: deptData, error: insertDeptError } = await supabase
     .from('departments')
-    .insert(DEPARTMENTS)
+    .upsert(DEPARTMENTS, { onConflict: 'name' })
     .select();
   if (insertDeptError) {
-    console.error('❌ 插入部门失败:', insertDeptError.message);
-    process.exit(1);
+    throw new Error(`写入部门失败: ${insertDeptError.message}`);
   }
-  console.log(`   ✅ 已插入 ${deptData.length} 个部门`);
+  console.log(`   ✅ 已写入 ${deptData.length} 个部门`);
 
   // 建立部门名称 -> ID 映射
   const deptMap = {};
@@ -160,18 +204,18 @@ async function main() {
   // ============================================================
   console.log('\n👤 第二步：更新管理员 profile...');
   const orgDeptId = deptMap['组织部'];
-  const { error: updateAdminError } = await supabase
+  const { data: updatedAdmin, error: updateAdminError } = await supabase
     .from('profiles')
     .update({
       department_id: orgDeptId,
-      full_name: '杨逸（管理员）',
       role: 'admin',
       updated_at: new Date().toISOString(),
     })
-    .eq('id', ADMIN_USER_ID);
-  if (updateAdminError) {
-    console.error('❌ 更新管理员 profile 失败:', updateAdminError.message);
-    process.exit(1);
+    .eq('id', adminUser.id)
+    .select('id')
+    .maybeSingle();
+  if (updateAdminError || !updatedAdmin) {
+    throw new Error(`更新管理员 profile 失败: ${updateAdminError?.message || 'profile 不存在'}`);
   }
   console.log('   ✅ 管理员 profile 已更新（部门: 组织部, 角色: admin）');
 
@@ -181,19 +225,38 @@ async function main() {
   console.log('\n👥 第三步：创建模拟用户...');
 
   let created = 0;
+  let updated = 0;
   let failed = 0;
+  const usersByEmail = new Map(
+    existingUsers
+      .filter((user) => user.email)
+      .map((user) => [user.email.toLowerCase(), user]),
+  );
 
   for (const user of DEMO_USERS) {
-    // 创建 auth user
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-      email: user.email,
-      password: user.password,
-      email_confirm: true,
-      user_metadata: {
-        full_name: user.fullName,
-        role: user.role,
-      },
-    });
+    const existingUser = usersByEmail.get(user.email.toLowerCase());
+    const authResult = existingUser
+      ? await supabase.auth.admin.updateUserById(existingUser.id, {
+          password: user.password,
+          user_metadata: {
+            ...existingUser.user_metadata,
+            full_name: user.fullName,
+            role: user.role,
+            demo_seed: true,
+          },
+        })
+      : await supabase.auth.admin.createUser({
+          email: user.email,
+          password: user.password,
+          email_confirm: true,
+          user_metadata: {
+            full_name: user.fullName,
+            role: user.role,
+            demo_seed: true,
+          },
+        });
+
+    const { data: authData, error: authError } = authResult;
 
     if (authError) {
       console.error(`   ❌ ${user.email}: 创建 auth 用户失败 - ${authError.message}`);
@@ -202,7 +265,9 @@ async function main() {
     }
 
     const userId = authData.user.id;
-    console.log(`   ✅ ${user.email} (${user.fullName}) -> auth 创建成功`);
+    console.log(
+      `   ✅ ${user.email} (${user.fullName}) -> auth ${existingUser ? '更新' : '创建'}成功`,
+    );
 
     // 创建 profile
     const profileData = {
@@ -222,15 +287,24 @@ async function main() {
     if (profileError) {
       console.error(`   ❌ ${user.email}: 创建 profile 失败 - ${profileError.message}`);
       // 回滚 auth user
-      await supabase.auth.admin.deleteUser(userId);
+      if (!existingUser) {
+        const { error: rollbackError } = await supabase.auth.admin.deleteUser(userId);
+        if (rollbackError) {
+          console.error(`   ❌ ${user.email}: auth 回滚失败 - ${rollbackError.message}`);
+        }
+      }
       failed++;
     } else {
-      created++;
+      if (existingUser) updated++;
+      else created++;
       console.log(`   ✅ ${user.email} -> profile 创建成功 (${user.role})`);
     }
   }
 
-  console.log(`\n📊 创建完成: ${created} 成功, ${failed} 失败`);
+  console.log(`\n📊 处理完成: ${created} 创建, ${updated} 更新, ${failed} 失败`);
+  if (failed > 0) {
+    throw new Error(`${failed} 个 Demo 用户处理失败，请检查上方错误。`);
+  }
 
   // ============================================================
   // 第四步：最终验证
@@ -269,7 +343,7 @@ async function main() {
   }
 
   console.log('\n🎉 Demo 数据准备完成！');
-  console.log(`   管理员: ${ADMIN_EMAIL} / 原有密码`);
+  console.log(`   管理员: ${adminEmail} / 原有密码`);
   console.log(`   模拟用户密码统一: Demo123456`);
 }
 

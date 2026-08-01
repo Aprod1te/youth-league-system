@@ -2,7 +2,14 @@
 
 import { useEffect, useState, useRef, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
+import Image from "next/image"
 import { createClient } from "@/lib/supabase/client"
+import {
+  getStorageDisplayName,
+  getStringArray,
+  isExternalFileUrl,
+  sanitizeStorageFileName,
+} from "@/lib/files"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -11,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { toast } from "@/components/ui/toast"
-import { ArrowLeft, MapPin, Calendar, User, DollarSign, Users, Upload, X, Download, ImagePlus, FileText, CheckSquare } from "lucide-react"
+import { ArrowLeft, MapPin, Calendar, User, DollarSign, Users, Upload, X, Download, ImagePlus, FileText, CheckSquare, QrCode, StopCircle } from "lucide-react"
 import { QRCodeSVG } from "qrcode.react"
 import type { User as SupabaseUser } from "@supabase/supabase-js"
 
@@ -27,7 +34,9 @@ interface ActivityDetail {
   department_id: string | null
   status: string
   max_participants: number | null
-  created_at: string
+  checkin_opens_at: string | null
+  checkin_closes_at: string | null
+  created_at: string | null
 }
 
 interface ActivityReport {
@@ -38,7 +47,7 @@ interface ActivityReport {
   attachments: string[] | null
   participant_count: number | null
   submitted_by: string
-  created_at: string
+  created_at: string | null
 }
 
 interface ProfileOption {
@@ -64,12 +73,34 @@ const statusLabel: Record<string, string> = {
 
 const MAX_PHOTOS = 5
 const MAX_DOCS = 3
+const MAX_PHOTO_BYTES = 8 * 1024 * 1024
+const MAX_DOC_BYTES = 15 * 1024 * 1024
 const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"]
 const ACCEPTED_DOC_TYPES = [
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]
+
+interface SignedFile {
+  path: string
+  url: string
+}
+
+async function createSignedFiles(
+  supabase: ReturnType<typeof createClient>,
+  bucket: string,
+  paths: string[]
+): Promise<SignedFile[]> {
+  const files = await Promise.all(
+    paths.map(async (path) => {
+      if (isExternalFileUrl(path)) return { path, url: path }
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 3600)
+      return error || !data?.signedUrl ? null : { path, url: data.signedUrl }
+    })
+  )
+  return files.filter((file): file is SignedFile => file !== null)
+}
 
 export default function ActivityDetailPage() {
   const params = useParams()
@@ -81,6 +112,8 @@ export default function ActivityDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [userRole, setUserRole] = useState<string | null>(null)
+  const [userDepartmentId, setUserDepartmentId] = useState<string | null>(null)
   const [summary, setSummary] = useState("")
   const [participantCount, setParticipantCount] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -95,12 +128,18 @@ export default function ActivityDetailPage() {
   // Lightbox state
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const [lightboxSrc, setLightboxSrc] = useState("")
+  const [signedPhotos, setSignedPhotos] = useState<SignedFile[]>([])
+  const [signedDocuments, setSignedDocuments] = useState<SignedFile[]>([])
 
   // Check-in state
   const [myCheckin, setMyCheckin] = useState<{ id: string } | null>(null)
   const [checkinCount, setCheckinCount] = useState(0)
   const [checkinUsers, setCheckinUsers] = useState<Array<{ id: string; full_name: string | null }>>([])
   const [checkinActionLoading, setCheckinActionLoading] = useState(false)
+  const [checkinDuration, setCheckinDuration] = useState(30)
+  const [checkinToken, setCheckinToken] = useState<string | null>(null)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [showQrDialog, setShowQrDialog] = useState(false)
 
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
   const [userRsvp, setUserRsvp] = useState<{ id: string; status: string } | null>(null)
@@ -122,6 +161,18 @@ export default function ActivityDetailPage() {
       try {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
         setUser(currentUser)
+        let currentUserRole = "applicant"
+
+        if (currentUser) {
+          const { data: currentProfile } = await supabase
+            .from("profiles")
+            .select("role, department_id")
+            .eq("id", currentUser.id)
+            .maybeSingle()
+          currentUserRole = currentProfile?.role ?? "applicant"
+          setUserRole(currentUserRole)
+          setUserDepartmentId(currentProfile?.department_id ?? null)
+        }
 
         // Step 1: Fetch the activity
         const { data: activityData, error: activityError } = await supabase
@@ -147,33 +198,76 @@ export default function ActivityDetailPage() {
           .limit(1)
 
         if (reportData && reportData.length > 0) {
-          setActivityReport(reportData[0] as ActivityReport)
+          const rawReport = reportData[0]
+          const report: ActivityReport = {
+            ...rawReport,
+            photos: getStringArray(rawReport.photos),
+            attachments: getStringArray(rawReport.attachments),
+          }
+          setActivityReport(report)
+          const [photos, documents] = await Promise.all([
+            createSignedFiles(supabase, "activity-photos", report.photos || []),
+            createSignedFiles(supabase, "activity-documents", report.attachments || []),
+          ])
+          setSignedPhotos(photos)
+          setSignedDocuments(documents)
         }
 
-        // Step 3: Fetch profiles to build name map
-        const { data: profileData } = await supabase
-          .from("profiles")
-          .select("id, full_name")
+        const canViewParticipantLists = currentUserRole !== "applicant"
+        let rsvpQuery = supabase
+          .from("activity_rsvps")
+          .select("id, user_id, status")
+          .eq("activity_id", activityId)
+        let checkinQuery = supabase
+          .from("activity_checkins")
+          .select("id, user_id")
+          .eq("activity_id", activityId)
+
+        if (!canViewParticipantLists) {
+          rsvpQuery = rsvpQuery.eq("user_id", currentUser?.id || "")
+          checkinQuery = checkinQuery.eq("user_id", currentUser?.id || "")
+        }
+
+        const [profileResult, rsvpResult, checkinResult, countResult] = await Promise.all([
+            canViewParticipantLists
+              ? supabase.from("profiles").select("id, full_name")
+              : Promise.resolve({ data: [] as ProfileOption[], error: null }),
+            rsvpQuery,
+            checkinQuery,
+            supabase.rpc("get_activity_participation_counts", {
+              p_activity_id: activityId,
+            }),
+          ])
+
+        const participationError =
+          profileResult.error ||
+          rsvpResult.error ||
+          checkinResult.error ||
+          countResult.error
+        if (participationError) throw participationError
+
+        const profileData = profileResult.data
+        const rsvpData = rsvpResult.data
+        const checkinData = checkinResult.data
+        const countData = countResult.data
 
         const profilesList = (profileData || []) as ProfileOption[]
         const map: Record<string, string> = {}
         for (const p of profilesList) {
-          map[p.id] = p.full_name || p.id
+          map[p.id] = p.full_name || "未命名成员"
         }
         setUserNameMap(map)
 
-        // Step 4: Fetch RSVPs for this activity
-        const { data: rsvpData } = await supabase
-          .from("activity_rsvps")
-          .select("id, user_id, status")
-          .eq("activity_id", activityId)
-
         const rsvpList = (rsvpData || []) as Array<{ id: string; user_id: string; status: string }>
-        setRsvpCount(rsvpList.filter((r) => r.status === "registered").length)
+        const participationCounts = countData?.[0]
+        setRsvpCount(
+          participationCounts?.registered_count ??
+            rsvpList.filter((r) => r.status === "registered").length
+        )
         setRsvpUsers(
           rsvpList.map((r) => ({
             id: r.user_id,
-            full_name: map[r.user_id] || r.user_id,
+            full_name: map[r.user_id] || "未公开",
             status: r.status,
           }))
         )
@@ -183,18 +277,12 @@ export default function ActivityDetailPage() {
           setUserRsvp(myRsvp ? { id: myRsvp.id, status: myRsvp.status } : null)
         }
 
-        // Step 5: Fetch check-in data for this activity
-        const { data: checkinData } = await supabase
-          .from("activity_checkins")
-          .select("id, user_id")
-          .eq("activity_id", activityId)
-
         const checkinList = (checkinData || []) as Array<{ id: string; user_id: string }>
-        setCheckinCount(checkinList.length)
+        setCheckinCount(participationCounts?.checkin_count ?? checkinList.length)
         setCheckinUsers(
           checkinList.map((c) => ({
             id: c.user_id,
-            full_name: map[c.user_id] || c.user_id,
+            full_name: map[c.user_id] || "未公开",
           }))
         )
 
@@ -221,6 +309,11 @@ export default function ActivityDetailPage() {
     }
   }, [photoPreviews])
 
+  useEffect(() => {
+    const interval = window.setInterval(() => setCurrentTime(Date.now()), 1000)
+    return () => window.clearInterval(interval)
+  }, [])
+
   const handlePhotoSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || files.length === 0) return
@@ -236,7 +329,7 @@ export default function ActivityDetailPage() {
     const invalidNames: string[] = []
 
     for (const file of selected) {
-      if (ACCEPTED_IMAGE_TYPES.includes(file.type)) {
+      if (ACCEPTED_IMAGE_TYPES.includes(file.type) && file.size <= MAX_PHOTO_BYTES) {
         validFiles.push(file)
       } else {
         invalidNames.push(file.name)
@@ -247,7 +340,7 @@ export default function ActivityDetailPage() {
       toast.add({
         type: "error",
         title: "不支持的文件类型",
-        description: `${invalidNames.join(", ")} 不是支持的图片格式`,
+        description: `${invalidNames.join(", ")} 的格式不受支持或超过 8 MB`,
       })
     }
 
@@ -288,7 +381,7 @@ export default function ActivityDetailPage() {
     const invalidNames: string[] = []
 
     for (const file of selected) {
-      if (ACCEPTED_DOC_TYPES.includes(file.type)) {
+      if (ACCEPTED_DOC_TYPES.includes(file.type) && file.size <= MAX_DOC_BYTES) {
         validFiles.push(file)
       } else {
         invalidNames.push(file.name)
@@ -299,7 +392,7 @@ export default function ActivityDetailPage() {
       toast.add({
         type: "error",
         title: "不支持的文件类型",
-        description: `${invalidNames.join(", ")} 不是支持的文档格式（仅支持 PDF、DOC、DOCX）`,
+        description: `${invalidNames.join(", ")} 的格式不受支持或超过 15 MB`,
       })
     }
 
@@ -318,12 +411,11 @@ export default function ActivityDetailPage() {
 
   const uploadFiles = async (files: File[], bucket: string, prefix: string): Promise<string[]> => {
     const supabase = supabaseRef.current
-    const urls: string[] = []
+    const paths: string[] = []
 
     for (const file of files) {
-      const timestamp = Date.now()
-      const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")
-      const filePath = `${prefix}/${safeName}_${timestamp}`
+      const safeName = sanitizeStorageFileName(file.name)
+      const filePath = `${prefix}/${crypto.randomUUID()}-${safeName}`
 
       const { error } = await supabase.storage.from(bucket).upload(filePath, file, {
         cacheControl: "3600",
@@ -339,13 +431,10 @@ export default function ActivityDetailPage() {
         continue
       }
 
-      const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(filePath)
-      if (publicData?.publicUrl) {
-        urls.push(publicData.publicUrl)
-      }
+      paths.push(filePath)
     }
 
-    return urls
+    return paths
   }
 
   const handleSubmitSummary = async () => {
@@ -355,27 +444,34 @@ export default function ActivityDetailPage() {
     const supabase = supabaseRef.current
 
     // Upload photos
-    let photoUrls: string[] = []
+    let photoPaths: string[] = []
     if (photoFiles.length > 0) {
-      photoUrls = await uploadFiles(photoFiles, "activity-photos", activityId)
+      photoPaths = await uploadFiles(photoFiles, "activity-photos", activityId)
     }
 
     // Upload documents
-    let docUrls: string[] = []
+    let documentPaths: string[] = []
     if (docFiles.length > 0) {
-      docUrls = await uploadFiles(docFiles, "activity-documents", activityId)
+      documentPaths = await uploadFiles(docFiles, "activity-documents", activityId)
     }
 
-    const { error: submitError } = await supabase.from("activity_reports").insert({
-      activity_id: activity.id,
-      summary: summary.trim(),
-      participant_count: parseInt(participantCount) || 0,
-      submitted_by: user.id,
-      photos: photoUrls,
-      attachments: docUrls,
+    const { data: reportId, error: submitError } = await supabase.rpc("submit_activity_report", {
+      p_activity_id: activity.id,
+      p_summary: summary.trim(),
+      p_participant_count: parseInt(participantCount) || 0,
+      p_photos: photoPaths,
+      p_attachments: documentPaths,
     })
 
     if (submitError) {
+      await Promise.all([
+        photoPaths.length
+          ? supabase.storage.from("activity-photos").remove(photoPaths)
+          : Promise.resolve(),
+        documentPaths.length
+          ? supabase.storage.from("activity-documents").remove(documentPaths)
+          : Promise.resolve(),
+      ])
       toast.add({
         type: "error",
         title: "提交失败",
@@ -391,7 +487,23 @@ export default function ActivityDetailPage() {
       description: "活动总结已提交",
     })
 
-    // Reset form state
+    const [photos, documents] = await Promise.all([
+      createSignedFiles(supabase, "activity-photos", photoPaths),
+      createSignedFiles(supabase, "activity-documents", documentPaths),
+    ])
+    setActivityReport({
+      id: reportId,
+      activity_id: activity.id,
+      summary: summary.trim(),
+      participant_count: parseInt(participantCount) || 0,
+      submitted_by: user.id,
+      photos: photoPaths,
+      attachments: documentPaths,
+      created_at: new Date().toISOString(),
+    })
+    setSignedPhotos(photos)
+    setSignedDocuments(documents)
+
     setSummary("")
     setParticipantCount("")
     setPhotoFiles([])
@@ -399,25 +511,10 @@ export default function ActivityDetailPage() {
     setDocFiles([])
     setSubmitting(false)
 
-    // Refresh the page to show updated report
-    window.location.reload()
   }
 
   const getOrganizerName = (userId: string) => {
-    return userNameMap[userId] || userId
-  }
-
-  const getFileNameFromUrl = (url: string) => {
-    try {
-      const pathname = new URL(url).pathname
-      const segments = pathname.split("/")
-      const rawName = segments[segments.length - 1] || ""
-      // Remove timestamp suffix (_xxxxx)
-      const underscoreIdx = rawName.lastIndexOf("_")
-      return underscoreIdx > 0 ? rawName.substring(0, underscoreIdx) : rawName
-    } catch {
-      return url
-    }
+    return userNameMap[userId] || "未公开"
   }
 
   const handleRegister = async () => {
@@ -425,48 +522,36 @@ export default function ActivityDetailPage() {
     setRsvpActionLoading(true)
     const supabase = supabaseRef.current
 
-    if (userRsvp && userRsvp.status === "cancelled") {
-      // Re-register: update the existing cancelled RSVP
-      const { error } = await supabase
-        .from("activity_rsvps")
-        .update({ status: "registered" })
-        .eq("id", userRsvp.id)
+    const { data: rsvpId, error } = await supabase.rpc("register_activity", {
+      p_activity_id: activity.id,
+    })
 
-      if (error) {
-        toast.add({ type: "error", title: "报名失败", description: error.message })
-        setRsvpActionLoading(false)
-        return
-      }
-
-      toast.add({ type: "success", title: "报名成功" })
-      setUserRsvp({ id: userRsvp.id, status: "registered" })
-      setRsvpCount((prev) => prev + 1)
-      setRsvpUsers((prev) =>
-        prev.map((u) => (u.id === user!.id ? { ...u, status: "registered" } : u))
-      )
-    } else {
-      // New registration
-      const { data, error } = await supabase
-        .from("activity_rsvps")
-        .insert({ activity_id: activity.id, user_id: user.id, status: "registered" })
-        .select()
-        .single()
-
-      if (error) {
-        toast.add({ type: "error", title: "报名失败", description: error.message })
-        setRsvpActionLoading(false)
-        return
-      }
-
-      toast.add({ type: "success", title: "报名成功" })
-      setUserRsvp({ id: data.id, status: "registered" })
-      setRsvpCount((prev) => prev + 1)
-      setRsvpUsers((prev) => [
-        ...prev,
-        { id: user!.id, full_name: userNameMap[user!.id] || user!.id, status: "registered" },
-      ])
+    if (error || !rsvpId) {
+      toast.add({ type: "error", title: "报名失败", description: error?.message || "未能创建报名记录" })
+      setRsvpActionLoading(false)
+      return
     }
 
+    const wasRegistered = userRsvp?.status === "registered"
+    toast.add({ type: "success", title: "报名成功" })
+    setUserRsvp({ id: rsvpId, status: "registered" })
+    if (!wasRegistered) setRsvpCount((prev) => prev + 1)
+    setRsvpUsers((prev) => {
+      const existing = prev.find((item) => item.id === user.id)
+      if (existing) {
+        return prev.map((item) =>
+          item.id === user.id ? { ...item, status: "registered" } : item
+        )
+      }
+      return [
+        ...prev,
+        {
+          id: user.id,
+          full_name: userNameMap[user.id] || "当前用户",
+          status: "registered",
+        },
+      ]
+    })
     setRsvpActionLoading(false)
   }
 
@@ -475,10 +560,9 @@ export default function ActivityDetailPage() {
     setRsvpActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error } = await supabase
-      .from("activity_rsvps")
-      .update({ status: "cancelled" })
-      .eq("id", userRsvp.id)
+    const { error } = await supabase.rpc("cancel_activity_registration", {
+      p_activity_id: activityId,
+    })
 
     if (error) {
       toast.add({ type: "error", title: "取消报名失败", description: error.message })
@@ -495,32 +579,73 @@ export default function ActivityDetailPage() {
     setRsvpActionLoading(false)
   }
 
-  const handleCheckin = async () => {
-    if (!user || !activity) return
+  const handleOpenCheckin = async () => {
+    if (!activity) return
     setCheckinActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error } = await supabase
-      .from("activity_checkins")
-      .insert({ activity_id: activity.id, user_id: user.id })
+    const { data: token, error } = await supabase.rpc("open_activity_checkin", {
+      p_activity_id: activity.id,
+      p_duration_minutes: checkinDuration,
+    })
 
-    if (error) {
-      toast.add({ type: "error", title: "签到失败", description: error.message })
+    if (error || !token) {
+      toast.add({ type: "error", title: "开启签到失败", description: error?.message || "未能生成签到令牌" })
       setCheckinActionLoading(false)
       return
     }
 
-    toast.add({ type: "success", title: "签到成功" })
-    setMyCheckin({ id: "temp" })
-    setCheckinCount((prev) => prev + 1)
-    setCheckinUsers((prev) => [
-      ...prev,
-      { id: user.id, full_name: userNameMap[user.id] || user.id },
-    ])
+    const now = new Date()
+    setCurrentTime(now.getTime())
+    setCheckinToken(token)
+    setActivity((current) => current ? {
+      ...current,
+      checkin_opens_at: now.toISOString(),
+      checkin_closes_at: new Date(now.getTime() + checkinDuration * 60_000).toISOString(),
+    } : current)
+    setShowQrDialog(true)
+    toast.add({ type: "success", title: "签到已开启" })
     setCheckinActionLoading(false)
   }
 
-  const showSummarySection = activity && activity.status === "completed"
+  const handleCloseCheckin = async () => {
+    if (!activity) return
+    setCheckinActionLoading(true)
+    const { error } = await supabaseRef.current.rpc("close_activity_checkin", {
+      p_activity_id: activity.id,
+    })
+    if (error) {
+      toast.add({ type: "error", title: "关闭签到失败", description: error.message })
+    } else {
+      setCheckinToken(null)
+      setCurrentTime(Date.now())
+      setShowQrDialog(false)
+      setActivity((current) => current ? { ...current, checkin_closes_at: new Date().toISOString() } : current)
+      toast.add({ type: "success", title: "签到已关闭" })
+    }
+    setCheckinActionLoading(false)
+  }
+
+  const canManageActivity = Boolean(
+    activity && user && (
+      activity.organizer_id === user.id ||
+      userRole === "admin" ||
+      userRole === "secretary" ||
+      (userRole === "minister" && activity.department_id === userDepartmentId)
+    )
+  )
+  const isCheckinOpen = Boolean(
+    activity?.checkin_opens_at &&
+    activity?.checkin_closes_at &&
+    currentTime >= new Date(activity.checkin_opens_at).getTime() &&
+    currentTime <= new Date(activity.checkin_closes_at).getTime()
+  )
+  const checkinUrl =
+    typeof window !== "undefined" && activity && checkinToken
+      ? `${window.location.origin}/dashboard/activities/${activity.id}/checkin?token=${encodeURIComponent(checkinToken)}`
+      : null
+
+  const showSummarySection = activity && activity.status === "completed" && canManageActivity
   const hasSummary = activityReport?.summary && activityReport.summary.trim().length > 0
 
   return (
@@ -549,7 +674,7 @@ export default function ActivityDetailPage() {
                 <div>
                   <CardTitle className="text-xl">{activity.title}</CardTitle>
                   <CardDescription className="mt-1">
-                    创建时间：{new Date(activity.created_at).toLocaleDateString("zh-CN")}
+                    创建时间：{activity.created_at ? new Date(activity.created_at).toLocaleDateString("zh-CN") : "-"}
                   </CardDescription>
                 </div>
                 <Badge variant={statusBadgeVariant[activity.status] || "outline"} className="text-sm">
@@ -693,7 +818,8 @@ export default function ActivityDetailPage() {
                 </div>
 
                 {/* Registered users list */}
-                {rsvpUsers.filter((u) => u.status === "registered").length > 0 && (
+                {userRole !== "applicant" &&
+                  rsvpUsers.filter((u) => u.status === "registered").length > 0 && (
                   <div>
                     <h4 className="mb-2 text-sm font-medium text-muted-foreground">
                       已报名人员
@@ -714,7 +840,7 @@ export default function ActivityDetailPage() {
           )}
 
           {/* Check-in Section */}
-          {activity && activity.status === "approved" && (
+          {activity && ["approved", "in_progress"].includes(activity.status) && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -737,21 +863,13 @@ export default function ActivityDetailPage() {
                     )}
                   </div>
 
-                  {user && (
-                    myCheckin ? (
-                      <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">
-                        已签到
-                      </Badge>
-                    ) : (
-                      <Button size="sm" onClick={handleCheckin} disabled={checkinActionLoading}>
-                        {checkinActionLoading ? "签到中..." : "签到"}
-                      </Button>
-                    )
-                  )}
+                  <Badge variant="outline">
+                    {isCheckinOpen ? "签到开放中" : "签到未开放"}
+                  </Badge>
                 </div>
 
                 {/* Checked-in users list */}
-                {checkinUsers.length > 0 && (
+                {userRole !== "applicant" && checkinUsers.length > 0 && (
                   <div>
                     <h4 className="mb-2 text-sm font-medium text-muted-foreground">
                       已签到人员
@@ -759,15 +877,83 @@ export default function ActivityDetailPage() {
                     <div className="flex flex-wrap gap-2">
                       {checkinUsers.map((u) => (
                         <Badge key={u.id} variant="secondary">
-                          {u.full_name || u.id}
+                            {u.full_name || "未命名成员"}
                         </Badge>
                       ))}
                     </div>
                   </div>
                 )}
+
+                {canManageActivity && (
+                  <div className="flex flex-wrap items-end gap-3 border-t pt-4">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="checkin-duration">开放时长（分钟）</Label>
+                      <Input
+                        id="checkin-duration"
+                        type="number"
+                        min={5}
+                        max={240}
+                        value={checkinDuration}
+                        onChange={(event) => setCheckinDuration(Number(event.target.value))}
+                        className="w-32"
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={handleOpenCheckin}
+                      disabled={
+                        checkinActionLoading ||
+                        !Number.isInteger(checkinDuration) ||
+                        checkinDuration < 5 ||
+                        checkinDuration > 240
+                      }
+                    >
+                      <QrCode className="mr-1.5 size-4" />
+                      {isCheckinOpen ? "重新生成二维码" : "开启签到"}
+                    </Button>
+                    {checkinToken && isCheckinOpen && (
+                      <Button variant="outline" size="sm" onClick={() => setShowQrDialog(true)}>
+                        展示二维码
+                      </Button>
+                    )}
+                    {isCheckinOpen && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCloseCheckin}
+                        disabled={checkinActionLoading}
+                      >
+                        <StopCircle className="mr-1.5 size-4" />
+                        关闭签到
+                      </Button>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
+
+          {/* QR Code Dialog */}
+          <Dialog open={showQrDialog && Boolean(checkinUrl)} onOpenChange={setShowQrDialog}>
+            <DialogContent className="sm:max-w-sm">
+              <DialogHeader>
+                <DialogTitle>扫码签到</DialogTitle>
+                <DialogDescription>
+                  有效期至 {activity.checkin_closes_at ? new Date(activity.checkin_closes_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "-"}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-col items-center gap-4 py-6">
+                {checkinUrl && (
+                  <div className="rounded-md border bg-white p-4">
+                    <QRCodeSVG
+                      value={checkinUrl}
+                      size={240}
+                    />
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
 
           {/* Activity Summary Section (already submitted) */}
           {hasSummary && (
@@ -789,21 +975,24 @@ export default function ActivityDetailPage() {
                 )}
 
                 {/* Photos display */}
-                {activityReport!.photos && activityReport.photos.length > 0 && (
+                {signedPhotos.length > 0 && (
                   <div className="space-y-2">
                     <h4 className="text-sm font-medium">活动照片</h4>
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                      {activityReport.photos.map((url, idx) => (
+                      {signedPhotos.map((file, idx) => (
                         <button
-                          key={idx}
+                          key={file.path}
                           type="button"
                           className="relative aspect-square rounded-lg border overflow-hidden group cursor-pointer"
-                          onClick={() => { setLightboxSrc(url); setLightboxOpen(true) }}
+                          onClick={() => { setLightboxSrc(file.url); setLightboxOpen(true) }}
                         >
-                          <img
-                            src={url}
+                          <Image
+                            src={file.url}
                             alt={`活动照片 ${idx + 1}`}
-                            className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                            fill
+                            sizes="(max-width: 640px) 50vw, 25vw"
+                            unoptimized
+                            className="object-cover transition-transform group-hover:scale-105"
                           />
                         </button>
                       ))}
@@ -812,20 +1001,20 @@ export default function ActivityDetailPage() {
                 )}
 
                 {/* Attachments display */}
-                {activityReport!.attachments && activityReport.attachments.length > 0 && (
+                {signedDocuments.length > 0 && (
                   <div className="space-y-2">
                     <h4 className="text-sm font-medium">活动文档</h4>
                     <div className="space-y-2">
-                      {activityReport.attachments.map((url, idx) => (
+                      {signedDocuments.map((file) => (
                         <a
-                          key={idx}
-                          href={url}
+                          key={file.path}
+                          href={file.url}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex items-center gap-2 rounded-lg border p-3 text-sm hover:bg-muted/50 transition-colors"
                         >
                           <FileText className="size-4 text-muted-foreground shrink-0" />
-                          <span className="truncate flex-1">{getFileNameFromUrl(url)}</span>
+                          <span className="truncate flex-1">{getStorageDisplayName(file.path)}</span>
                           <Download className="size-4 text-muted-foreground shrink-0" />
                         </a>
                       ))}
@@ -876,10 +1065,13 @@ export default function ActivityDetailPage() {
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-2">
                       {photoPreviews.map((preview, idx) => (
                         <div key={idx} className="relative aspect-square rounded-lg border overflow-hidden group">
-                          <img
+                          <Image
                             src={preview}
                             alt={`预览 ${idx + 1}`}
-                            className="w-full h-full object-cover"
+                            fill
+                            sizes="(max-width: 640px) 50vw, 33vw"
+                            unoptimized
+                            className="object-cover"
                           />
                           <button
                             type="button"
@@ -993,9 +1185,12 @@ export default function ActivityDetailPage() {
             <X className="size-5" />
           </button>
           {lightboxSrc && (
-            <img
+            <Image
               src={lightboxSrc}
               alt="照片放大"
+              width={1600}
+              height={1200}
+              unoptimized
               className="max-h-[80vh] w-full object-contain rounded-lg"
             />
           )}

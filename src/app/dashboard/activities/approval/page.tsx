@@ -11,7 +11,6 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { toast } from "@/components/ui/toast"
-import type { User as SupabaseUser } from "@supabase/supabase-js"
 
 interface Activity {
   id: string
@@ -50,9 +49,6 @@ export default function ActivityApprovalPage() {
   const [activities, setActivities] = useState<Activity[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [user, setUser] = useState<SupabaseUser | null>(null)
-  const [userRole, setUserRole] = useState<string | null>(null)
-  const [userDeptId, setUserDeptId] = useState<string | null>(null)
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
 
   // Reject dialog
@@ -73,49 +69,33 @@ export default function ActivityApprovalPage() {
     async function load() {
       try {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
-        setUser(currentUser)
+        if (!currentUser) {
+          router.push("/login")
+          return
+        }
 
-        // Check user role and get department
+        // Check user role before loading approval data.
         let currentRole: string | null = null
-        let currentDeptId: string | null = null
-        if (currentUser) {
-          const { data: profileData } = await supabase
-            .from("profiles")
-            .select("role, department_id")
-            .eq("id", currentUser.id)
-            .single()
+        const { data: roleProfile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", currentUser.id)
+          .single()
 
-          if (profileData) {
-            currentRole = (profileData as { role: string }).role
-            currentDeptId = (profileData as { department_id: string | null }).department_id
-          }
-          setUserRole(currentRole)
-          setUserDeptId(currentDeptId)
-
-          // Route guard: applicant and member cannot access this page
-          if (currentRole === "applicant" || currentRole === "member") {
-            router.push("/dashboard")
-            return
-          }
-
-          if (currentRole !== "admin" && currentRole !== "secretary" && currentRole !== "minister") {
-            setError("您没有审批权限")
-            setLoading(false)
-            return
-          }
+        if (roleProfile) {
+          currentRole = roleProfile.role
+        }
+        if (currentRole !== "admin" && currentRole !== "secretary") {
+          router.push("/dashboard")
+          return
         }
 
         // Step 1: Fetch activities with status pending_approval
-        let activityQuery = supabase
+        const activityQuery = supabase
           .from("activities")
           .select("*")
           .eq("status", "pending_approval")
           .order("created_at", { ascending: false })
-
-        // If minister, only show activities for their department
-        if (currentRole === "minister" && currentDeptId) {
-          activityQuery = activityQuery.eq("department_id", currentDeptId)
-        }
 
         const { data: activityData, error: activityError } = await activityQuery
 
@@ -145,16 +125,17 @@ export default function ActivityApprovalPage() {
     }
 
     load()
-  }, [])
+  }, [router])
 
   const handleApprove = async (activityId: string) => {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error: updateError } = await supabase
-      .from("activities")
-      .update({ status: "approved", approved_by: user?.id || null })
-      .eq("id", activityId)
+    const { error: updateError } = await supabase.rpc("review_activity", {
+      p_activity_id: activityId,
+      p_decision: "approved",
+      p_note: null,
+    })
 
     if (updateError) {
       toast.add({
@@ -164,23 +145,6 @@ export default function ActivityApprovalPage() {
       })
       setActionLoading(false)
       return
-    }
-
-    // Create notification for the organizer
-    const targetActivity = activities.find((a) => a.id === activityId)
-    if (targetActivity) {
-      console.log("正在创建通知给用户:", targetActivity.organizer_id)
-      const { error: notifError } = await supabase.from("notifications").insert({
-        user_id: targetActivity.organizer_id,
-        title: "活动审批通过",
-        content: `你的活动"${targetActivity.title}"已通过审批`,
-        type: "activity",
-        related_id: activityId,
-        is_read: false,
-      })
-      if (notifError) {
-        console.error("创建通知失败:", notifError)
-      }
     }
 
     toast.add({
@@ -205,14 +169,11 @@ export default function ActivityApprovalPage() {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error: updateError } = await supabase
-      .from("activities")
-      .update({
-        status: "rejected",
-        approval_note: rejectNote.trim() || null,
-        approved_by: user?.id || null,
-      })
-      .eq("id", rejectTargetId)
+    const { error: updateError } = await supabase.rpc("review_activity", {
+      p_activity_id: rejectTargetId,
+      p_decision: "rejected",
+      p_note: rejectNote.trim() || null,
+    })
 
     if (updateError) {
       toast.add({
@@ -222,23 +183,6 @@ export default function ActivityApprovalPage() {
       })
       setActionLoading(false)
       return
-    }
-
-    // Create notification for the organizer
-    const targetActivity = activities.find((a) => a.id === rejectTargetId)
-    if (targetActivity) {
-      console.log("正在创建通知给用户:", targetActivity.organizer_id)
-      const { error: notifError } = await supabase.from("notifications").insert({
-        user_id: targetActivity.organizer_id,
-        title: "活动审批未通过",
-        content: `你的活动"${targetActivity.title}"未通过审批，原因：${rejectNote.trim() || "不符合要求"}`,
-        type: "activity",
-        related_id: rejectTargetId,
-        is_read: false,
-      })
-      if (notifError) {
-        console.error("创建通知失败:", notifError)
-      }
     }
 
     toast.add({
@@ -260,7 +204,7 @@ export default function ActivityApprovalPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">活动审批</h1>
+        <h1 className="text-2xl font-bold">活动审批</h1>
         <Badge variant="outline" className="text-sm">
           共 {activities.length} 条待审批
         </Badge>

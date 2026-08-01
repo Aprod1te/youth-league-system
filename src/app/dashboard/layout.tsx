@@ -1,11 +1,16 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
+import {
+  getNotificationHref,
+  NOTIFICATIONS_CHANGED_EVENT,
+} from "@/lib/notifications"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import { toast } from "@/components/ui/toast"
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -35,12 +40,15 @@ import type { User as SupabaseUser } from "@supabase/supabase-js"
 interface Notification {
   id: string
   title: string
-  content: string
+  content: string | null
   type: string
   related_id: string | null
   is_read: boolean
-  created_at: string
+  created_at: string | null
 }
+
+const notificationColumns =
+  "id, title, content, type, related_id, is_read, created_at"
 
 const allNavigation = [
   { name: "工作台", href: "/dashboard", icon: LayoutDashboard, roles: ["admin", "minister", "secretary", "member", "applicant"] },
@@ -49,7 +57,7 @@ const allNavigation = [
   { name: "任务管理", href: "/dashboard/tasks", icon: ClipboardList, roles: ["admin", "minister", "secretary", "member"] },
   { name: "任务审批", href: "/dashboard/tasks/approval", icon: CheckSquare, roles: ["admin", "secretary"] },
   { name: "活动管理", href: "/dashboard/activities", icon: Calendar, roles: ["admin", "minister", "secretary", "member", "applicant"] },
-  { name: "活动审批", href: "/dashboard/activities/approval", icon: Calendar, roles: ["admin", "minister", "secretary"] },
+  { name: "活动审批", href: "/dashboard/activities/approval", icon: Calendar, roles: ["admin", "secretary"] },
   { name: "入部审核", href: "/dashboard/applications", icon: ClipboardList, roles: ["admin", "minister", "secretary"] },
   { name: "活动归档", href: "/dashboard/archive", icon: Archive, roles: ["admin", "minister", "secretary", "member", "applicant"] },
   { name: "审核汇总", href: "/dashboard/review", icon: FileSpreadsheet, roles: ["admin", "secretary"] },
@@ -83,8 +91,23 @@ export default function DashboardLayout({
 
   const unreadCount = notifications.filter((n) => !n.is_read).length
 
+  const fetchNotifications = useCallback(async (userId: string) => {
+    const supabase = supabaseRef.current
+    const { data } = await supabase
+      .from("notifications")
+      .select(notificationColumns)
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(5)
+
+    if (data) {
+      setNotifications(data as Notification[])
+    }
+  }, [])
+
   useEffect(() => {
     const supabase = supabaseRef.current
+    let currentUserId: string | null = null
 
     const getUser = async () => {
       const {
@@ -96,6 +119,7 @@ export default function DashboardLayout({
         return
       }
 
+      currentUserId = currentUser.id
       setUser(currentUser)
 
       const { data: profileData } = await supabase
@@ -114,40 +138,87 @@ export default function DashboardLayout({
 
     getUser()
 
-    const interval = setInterval(() => {
-      supabaseRef.current.auth.getUser().then(({ data: { user: currentUser } }) => {
-        if (currentUser) fetchNotifications(currentUser.id)
-      })
-    }, 5000)
-
-    return () => clearInterval(interval)
-  }, [router])
-
-  const fetchNotifications = async (userId: string) => {
-    const supabase = supabaseRef.current
-    const { data } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(5)
-
-    if (data) {
-      setNotifications(data as Notification[])
+    const refreshWhenVisible = () => {
+      if (currentUserId && document.visibilityState === "visible") {
+        void fetchNotifications(currentUserId)
+      }
     }
-  }
+
+    const interval = window.setInterval(refreshWhenVisible, 60_000)
+    window.addEventListener("focus", refreshWhenVisible)
+    window.addEventListener(NOTIFICATIONS_CHANGED_EVENT, refreshWhenVisible)
+    document.addEventListener("visibilitychange", refreshWhenVisible)
+
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener("focus", refreshWhenVisible)
+      window.removeEventListener(NOTIFICATIONS_CHANGED_EVENT, refreshWhenVisible)
+      document.removeEventListener("visibilitychange", refreshWhenVisible)
+    }
+  }, [fetchNotifications, router])
+
+  useEffect(() => {
+    if (notifDropdownOpen && user) {
+      void fetchNotifications(user.id)
+    }
+  }, [fetchNotifications, notifDropdownOpen, user])
 
   const handleMarkAllRead = async () => {
     if (!user || unreadCount === 0) return
     const supabase = supabaseRef.current
 
-    await supabase
+    const { error } = await supabase
       .from("notifications")
       .update({ is_read: true })
       .eq("user_id", user.id)
       .eq("is_read", false)
 
-    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
+    if (error) {
+      toast.add({
+        type: "error",
+        title: "标记失败",
+        description: error.message,
+      })
+      return
+    }
+
+    setNotifications((current) =>
+      current.map((notification) => ({ ...notification, is_read: true }))
+    )
+  }
+
+  const handleNotificationClick = (notification: Notification) => {
+    const href = getNotificationHref(notification.type, notification.related_id)
+
+    if (!notification.is_read && user) {
+      void (async () => {
+        const { data, error } = await supabaseRef.current
+          .from("notifications")
+          .update({ is_read: true })
+          .eq("id", notification.id)
+          .eq("user_id", user.id)
+          .select("id")
+          .maybeSingle()
+
+        if (error || !data) {
+          toast.add({
+            type: "error",
+            title: "标记失败",
+            description: error?.message || "通知不存在或已被删除",
+          })
+          return
+        }
+
+        setNotifications((current) =>
+          current.map((item) =>
+            item.id === notification.id ? { ...item, is_read: true } : item
+          )
+        )
+      })()
+    }
+
+    setNotifDropdownOpen(false)
+    if (href) router.push(href)
   }
 
   const handleSignOut = async () => {
@@ -276,12 +347,11 @@ export default function DashboardLayout({
           {/* Notification bell */}
           <div className="relative">
             <button
-              onClick={async () => {
-                if (user) await fetchNotifications(user.id)
-                setNotifDropdownOpen(!notifDropdownOpen)
-              }}
+              type="button"
+              onClick={() => setNotifDropdownOpen((open) => !open)}
               className="relative inline-flex items-center justify-center rounded-lg size-9 hover:bg-muted hover:text-foreground transition-all duration-150 cursor-pointer"
               aria-label="通知"
+              title="通知"
             >
               <Bell className="size-5" />
               {unreadCount > 0 && (
@@ -297,15 +367,16 @@ export default function DashboardLayout({
                   className="fixed inset-0 z-40"
                   onClick={() => setNotifDropdownOpen(false)}
                 />
-                <div className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-border bg-popover shadow-md z-50 animate-fade-in">
+                <div className="absolute right-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-lg border border-border bg-popover shadow-md animate-fade-in">
                   <div className="flex items-center justify-between px-4 py-3 border-b border-border">
                     <span className="text-sm font-medium">通知</span>
                     {unreadCount > 0 && (
                       <button
+                        type="button"
                         className="text-xs text-primary hover:underline"
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleMarkAllRead()
+                          void handleMarkAllRead()
                         }}
                       >
                         全部已读
@@ -320,32 +391,14 @@ export default function DashboardLayout({
                   ) : (
                     <div className="max-h-80 overflow-y-auto">
                       {notifications.map((notif) => (
-                        <div
+                        <button
+                          type="button"
                           key={notif.id}
-                          className={`px-4 py-3 border-b border-border last:border-0 cursor-pointer hover:bg-muted/50 transition-colors ${
+                          className={`block w-full border-b border-border px-4 py-3 text-left last:border-0 hover:bg-muted/50 transition-colors ${
                             !notif.is_read ? "bg-muted/30" : ""
                           }`}
-                          onClick={() => {
-                            if (!notif.is_read && user) {
-                              supabaseRef.current
-                                .from("notifications")
-                                .update({ is_read: true })
-                                .eq("id", notif.id)
-                                .then(() => {
-                                  setNotifications((prev) =>
-                                    prev.map((n) =>
-                                      n.id === notif.id ? { ...n, is_read: true } : n
-                                    )
-                                  )
-                                })
-                            }
-                            setNotifDropdownOpen(false)
-                            if (notif.type === "application") router.push("/dashboard/applications")
-                            else if (notif.type === "activity") router.push("/dashboard/activities/approval")
-                            else if (notif.type === "task") router.push("/dashboard/tasks")
-                          }}
+                          onClick={() => handleNotificationClick(notif)}
                         >
-                          {/* Unread indicator dot */}
                           {!notif.is_read && (
                             <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary mr-2 align-middle" />
                           )}
@@ -356,9 +409,11 @@ export default function DashboardLayout({
                             {notif.content}
                           </p>
                           <p className="text-[10px] text-muted-foreground mt-1">
-                            {new Date(notif.created_at).toLocaleString()}
+                            {notif.created_at
+                              ? new Date(notif.created_at).toLocaleString("zh-CN")
+                              : "时间未知"}
                           </p>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   )}

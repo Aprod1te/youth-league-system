@@ -1,9 +1,9 @@
 "use client"
 
-import { useEffect, useState, useRef, useCallback } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -49,68 +49,67 @@ const roleLabel: Record<string, string> = {
 export default function MembersPage() {
   const router = useRouter()
   const [profiles, setProfiles] = useState<Profile[]>([])
-  const [filteredProfiles, setFilteredProfiles] = useState<Profile[]>([])
   const [filterRole, setFilterRole] = useState("all")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const fetchedRef = useRef(false)
-  const supabase = createClient()
+  const supabaseRef = useRef(createClient())
 
-  const fetchData = useCallback(async () => {
+  useEffect(() => {
     if (fetchedRef.current) return
     fetchedRef.current = true
 
-    try {
-      // Route guard: applicant cannot access this page
-      const { data: { user: currentUser } } = await supabase.auth.getUser()
-      if (currentUser) {
-        const { data: profileData } = await supabase
+    const supabase = supabaseRef.current
+
+    async function load() {
+      try {
+        // Route guard: applicant cannot access this page
+        const { data: { user: currentUser } } = await supabase.auth.getUser()
+        if (currentUser) {
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", currentUser.id)
+            .single()
+          if (profileData?.role === "applicant") {
+            router.push("/dashboard")
+            return
+          }
+        }
+
+        const { data, error: profileError } = await supabase
           .from("profiles")
-          .select("role")
-          .eq("id", currentUser.id)
-          .single()
-        if (profileData && (profileData as { role: string }).role === "applicant") {
-          router.push("/dashboard")
+          .select("id, full_name, student_id, role, created_at, department:departments(id, name)")
+          .order("created_at", { ascending: false })
+
+        if (profileError) {
+          setError(profileError.message)
           return
         }
+
+        setProfiles((data || []) as unknown as Profile[])
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "加载失败")
+      } finally {
+        setLoading(false)
       }
-
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id, full_name, student_id, role, created_at, department:departments(id, name)")
-        .order("created_at", { ascending: false })
-
-      if (error) {
-        setError(error.message)
-        return
-      }
-
-      const profilesData = (data || []) as unknown as Profile[]
-      setProfiles(profilesData)
-      setFilteredProfiles(profilesData)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
     }
-  }, [supabase])
 
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
+    void load()
+  }, [router])
 
-  useEffect(() => {
-    if (filterRole === "all") {
-      setFilteredProfiles(profiles)
-    } else {
-      setFilteredProfiles(profiles.filter((p) => p.role === filterRole))
-    }
-  }, [filterRole, profiles])
+  const filteredProfiles = useMemo(
+    () =>
+      filterRole === "all"
+        ? profiles
+        : profiles.filter((profile) => profile.role === filterRole),
+    [filterRole, profiles]
+  )
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">人员管理</h1>
+        <h1 className="text-2xl font-bold">人员管理</h1>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">角色筛选：</span>
           <Select value={filterRole} onValueChange={(value) => setFilterRole(value ?? "all")}>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent } from "@/components/ui/card"
@@ -14,7 +14,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { toast } from "@/components/ui/toast"
 import { Plus } from "lucide-react"
-import type { User } from "@supabase/supabase-js"
 
 interface Task {
   id: string
@@ -75,11 +74,9 @@ const priorityLabel: Record<string, string> = {
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([])
-  const [filteredTasks, setFilteredTasks] = useState<Task[]>([])
   const [filterStatus, setFilterStatus] = useState("all")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [user, setUser] = useState<User | null>(null)
   const [userRole, setUserRole] = useState<string | null>(null)
   const [profiles, setProfiles] = useState<ProfileOption[]>([])
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
@@ -112,7 +109,6 @@ export default function TasksPage() {
 
     const tasksList = (taskData || []) as unknown as Task[]
     setTasks(tasksList)
-    setFilteredTasks(tasksList)
 
     // Step 2: Fetch all profiles
     const { data: profileData } = await supabase
@@ -140,8 +136,6 @@ export default function TasksPage() {
     async function load() {
       try {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
-        setUser(currentUser)
-
         // Get user role
         if (currentUser) {
           const { data: profileData } = await supabase
@@ -166,39 +160,34 @@ export default function TasksPage() {
     load()
   }, [])
 
-  useEffect(() => {
-    if (filterStatus === "all") {
-      setFilteredTasks(tasks)
-    } else {
-      setFilteredTasks(tasks.filter((t) => t.status === filterStatus))
-    }
-  }, [filterStatus, tasks])
+  const filteredTasks = useMemo(
+    () =>
+      filterStatus === "all"
+        ? tasks
+        : tasks.filter((task) => task.status === filterStatus),
+    [filterStatus, tasks]
+  )
 
   const getAssignName = (userId: string | null) => {
     if (!userId) return "-"
     return userNameMap[userId] || userId
   }
 
-  const getCreatorName = (userId: string) => {
-    return userNameMap[userId] || userId
-  }
-
-  const canCreateTask = userRole === "admin" || userRole === "minister"
+  const canCreateTask =
+    userRole === "admin" || userRole === "secretary" || userRole === "minister"
 
   const handleCreateTask = async () => {
-    if (!user || !newTitle.trim()) return
+    if (!newTitle.trim()) return
 
     setSubmitting(true)
     const supabase = supabaseRef.current
 
-    const { error: insertError } = await supabase.from("tasks").insert({
-      title: newTitle.trim(),
-      description: newDescription.trim() || null,
-      assigned_to: newAssignedTo || null,
-      priority: newPriority,
-      deadline: newDueDate || null,
-      created_by: user.id,
-      status: "pending",
+    const { error: insertError } = await supabase.rpc("create_task", {
+      p_title: newTitle.trim(),
+      p_description: newDescription.trim() || null,
+      p_assigned_to: newAssignedTo || null,
+      p_priority: newPriority,
+      p_deadline: newDueDate || null,
     })
 
     if (insertError) {
@@ -211,33 +200,10 @@ export default function TasksPage() {
       return
     }
 
-    // Create notification for the assigned user
-    if (newAssignedTo) {
-      // Fetch the just-created task to get its ID
-      const { data: createdTasks } = await supabase
-        .from("tasks")
-        .select("id")
-        .eq("title", newTitle.trim())
-        .eq("created_by", user.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-
-      const newTaskId = createdTasks && createdTasks.length > 0 ? createdTasks[0].id : null
-
-      await supabase.from("notifications").insert({
-        user_id: newAssignedTo,
-        title: "新任务分配",
-        content: `你有一个新任务：「${newTitle.trim()}」`,
-        type: "task_assigned",
-        related_id: newTaskId,
-        is_read: false,
-      })
-    }
-
     toast.add({
       type: "success",
       title: "创建成功",
-      description: "任务已创建",
+      description: "任务已创建并提交审批",
     })
 
     // Refresh task list
@@ -256,7 +222,7 @@ export default function TasksPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">任务管理</h1>
+        <h1 className="text-2xl font-bold">任务管理</h1>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">状态筛选：</span>

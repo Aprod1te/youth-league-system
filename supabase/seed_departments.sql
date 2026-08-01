@@ -1,12 +1,6 @@
 -- 团委部门种子数据
 -- 共 19 个部门/组织：7 个团委直属部门 + 6 个学院团总支 + 6 个校级学生组织
--- 使用方法：在 Supabase Dashboard 的 SQL Editor 中执行此脚本
--- 注意：执行前请先清空现有数据，否则会因唯一约束冲突而失败
-
--- 先断开 profiles 对 departments 的外键引用，再清空 departments
--- 避免 TRUNCATE ... CASCADE 因外键约束或 RLS 报错
-UPDATE profiles SET department_id = NULL WHERE department_id IS NOT NULL;
-DELETE FROM departments;
+-- 可由 supabase db reset 自动执行；重复运行只更新标准部门信息。
 
 -- ========================================
 -- 一、团委直属部门（7个）
@@ -39,7 +33,10 @@ INSERT INTO departments (name, description, max_members) VALUES
 
 ('团委青年志愿者服务总队',
  '统筹全校青年志愿服务工作，组织各类志愿服务活动，管理志愿者注册与工时记录，对接校外公益组织与社区服务需求，弘扬"奉献、友爱、互助、进步"的志愿精神。',
- 40);
+ 40)
+ON CONFLICT (name) DO UPDATE SET
+  description = EXCLUDED.description,
+  max_members = EXCLUDED.max_members;
 
 -- ========================================
 -- 二、院级团总支（6个）
@@ -68,7 +65,10 @@ INSERT INTO departments (name, description, max_members) VALUES
 
 ('人文学院团总支',
  '负责本学院共青团工作的统筹协调，指导各团支部开展组织生活、主题团日、推优入党等工作，服务本学院团员青年的成长发展，是学院层面共青团工作的中枢。',
- 35);
+ 35)
+ON CONFLICT (name) DO UPDATE SET
+  description = EXCLUDED.description,
+  max_members = EXCLUDED.max_members;
 
 INSERT INTO departments (name, description, max_members) VALUES
 ('学生联合会',
@@ -93,5 +93,7 @@ INSERT INTO departments (name, description, max_members) VALUES
 
 ('第二课堂管理部',
  '负责"第二课堂成绩单"制度的组织实施与系统运维，统筹第二课堂活动发布、学分认定和数据管理，推动第二课堂与第一课堂的有机融合，服务学生综合素质评价。',
- 20);
-
+ 20)
+ON CONFLICT (name) DO UPDATE SET
+  description = EXCLUDED.description,
+  max_members = EXCLUDED.max_members;

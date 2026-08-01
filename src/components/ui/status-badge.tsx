@@ -36,36 +36,32 @@ const statusLabels: Record<string, string> = {
   cancelled: "已取消",
 }
 
+type StatusVariant = NonNullable<VariantProps<typeof statusBadgeVariants>["variant"]>
+
+const statusVariantMap: Record<string, StatusVariant> = {
+  pending: "pending",
+  pending_approval: "pending",
+  approved: "approved",
+  rejected: "rejected",
+  completed: "completed",
+  submitted: "submitted",
+  draft: "draft",
+  in_progress: "in_progress",
+  cancelled: "cancelled",
+}
+
 interface StatusBadgeProps extends VariantProps<typeof statusBadgeVariants> {
   status: string
   className?: string
 }
 
 export function StatusBadge({ status, variant, className }: StatusBadgeProps) {
-  const mappedVariant =
-    variant ||
-    (status === "pending" || status === "pending_approval"
-      ? "pending"
-      : status === "approved"
-      ? "approved"
-      : status === "rejected"
-      ? "rejected"
-      : status === "completed"
-      ? "completed"
-      : status === "submitted"
-      ? "submitted"
-      : status === "draft"
-      ? "draft"
-      : status === "in_progress"
-      ? "in_progress"
-      : status === "cancelled"
-      ? "cancelled"
-      : "draft")
+  const mappedVariant = variant ?? statusVariantMap[status] ?? "draft"
 
   const label = statusLabels[status] || status
 
   return (
-    <span className={cn(statusBadgeVariants({ variant: mappedVariant as any }), className)}>
+    <span className={cn(statusBadgeVariants({ variant: mappedVariant }), className)}>
       {label}
     </span>
   )

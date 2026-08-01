@@ -10,7 +10,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { toast } from "@/components/ui/toast"
 import { ArrowLeft, Calendar, User, Flag } from "lucide-react"
-import type { User as SupabaseUser } from "@supabase/supabase-js"
 
 interface TaskDetail {
   id: string
@@ -22,11 +21,22 @@ interface TaskDetail {
   created_at: string
   created_by: string
   assigned_to: string | null
+  approval_status: string | null
 }
 
 interface ProfileOption {
   id: string
   full_name: string | null
+}
+
+interface TaskSubmission {
+  id: string
+  task_id: string
+  user_id: string
+  content: string
+  status: string
+  feedback: string | null
+  created_at: string | null
 }
 
 const statusBadgeVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -63,20 +73,11 @@ export default function TaskDetailPage() {
   const [task, setTask] = useState<TaskDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [user, setUser] = useState<SupabaseUser | null>(null)
-  const [userRole, setUserRole] = useState<string | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
   const [feedback, setFeedback] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
-  const [submissions, setSubmissions] = useState<Array<{
-    id: string
-    task_id: string
-    user_id: string
-    content: string
-    status: string
-    feedback: string | null
-    created_at: string
-  }>>([])
+  const [submissions, setSubmissions] = useState<TaskSubmission[]>([])
   const didFetch = useRef(false)
   const supabaseRef = useRef(createClient())
 
@@ -89,19 +90,7 @@ export default function TaskDetailPage() {
     async function load() {
       try {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
-        setUser(currentUser)
-
-        // Get user role
-        if (currentUser) {
-          const { data: profileData } = await supabase
-            .from("profiles")
-            .select("role")
-            .eq("id", currentUser.id)
-            .single()
-          if (profileData) {
-            setUserRole((profileData as { role: string }).role)
-          }
-        }
+        setUserId(currentUser?.id ?? null)
 
         // Step 1: Fetch the task
         const { data: taskData, error: taskError } = await supabase
@@ -129,6 +118,15 @@ export default function TaskDetailPage() {
           map[p.id] = p.full_name || p.id
         }
         setUserNameMap(map)
+
+        const { data: submissionData, error: submissionError } = await supabase
+          .from("task_submissions")
+          .select("id, task_id, user_id, content, status, feedback, created_at")
+          .eq("task_id", taskId)
+          .order("created_at", { ascending: false })
+
+        if (submissionError) throw submissionError
+        setSubmissions(submissionData || [])
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败")
       } finally {
@@ -140,17 +138,16 @@ export default function TaskDetailPage() {
   }, [taskId])
 
   const handleSubmitFeedback = async () => {
-    if (!user || !task || !feedback.trim()) return
+    if (!userId || !task || !feedback.trim()) return
 
     setSubmitting(true)
     const supabase = supabaseRef.current
 
-    // Insert submission
-    const { error: submitError } = await supabase.from("task_submissions").insert({
-      task_id: task.id,
-      user_id: user.id,
-      content: feedback.trim(),
-      status: "submitted",
+    const { error: submitError } = await supabase.rpc("submit_task", {
+      p_task_id: task.id,
+      p_content: feedback.trim(),
+      p_progress: 100,
+      p_attachments: [],
     })
 
     if (submitError) {
@@ -158,22 +155,6 @@ export default function TaskDetailPage() {
         type: "error",
         title: "提交失败",
         description: submitError.message,
-      })
-      setSubmitting(false)
-      return
-    }
-
-    // Update task status to completed
-    const { error: updateError } = await supabase
-      .from("tasks")
-      .update({ status: "completed" })
-      .eq("id", task.id)
-
-    if (updateError) {
-      toast.add({
-        type: "error",
-        title: "更新失败",
-        description: updateError.message,
       })
       setSubmitting(false)
       return
@@ -195,15 +176,7 @@ export default function TaskDetailPage() {
       .eq("task_id", task.id)
       .order("created_at", { ascending: false })
 
-    setSubmissions((freshSubmissions || []) as Array<{
-      id: string
-      task_id: string
-      user_id: string
-      content: string
-      status: string
-      feedback: string | null
-      created_at: string
-    }>)
+    setSubmissions(freshSubmissions || [])
 
     setFeedback("")
     setSubmitting(false)
@@ -212,8 +185,8 @@ export default function TaskDetailPage() {
   const canSubmit =
     task &&
     ["pending", "in_progress"].includes(task.status) &&
-    userRole &&
-    ["admin", "minister", "officer"].includes(userRole)
+    task.approval_status === "approved" &&
+    userId === task.assigned_to
 
   const getCreatorName = (userId: string) => userNameMap[userId] || userId
   const getAssignName = (userId: string | null) => {
@@ -297,7 +270,7 @@ export default function TaskDetailPage() {
               <CardHeader>
                 <CardTitle>提交反馈</CardTitle>
                 <CardDescription>
-                  完成任务后请提交反馈，提交后任务状态将自动变为"已完成"
+                  完成任务后请提交反馈，提交后任务状态将自动变为“已完成”
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -336,13 +309,13 @@ export default function TaskDetailPage() {
                   <div key={sub.id} className="rounded-lg border p-4">
                     <div className="flex items-start justify-between mb-2">
                       <span className="text-xs text-muted-foreground">
-                        {new Date(sub.created_at).toLocaleDateString("zh-CN", {
+                        {sub.created_at ? new Date(sub.created_at).toLocaleDateString("zh-CN", {
                           year: "numeric",
                           month: "2-digit",
                           day: "2-digit",
                           hour: "2-digit",
                           minute: "2-digit",
-                        })}
+                        }) : "-"}
                       </span>
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                         sub.status === "submitted" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"

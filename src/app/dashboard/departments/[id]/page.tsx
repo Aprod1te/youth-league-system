@@ -27,7 +27,6 @@ import {
   Building2,
   Users,
   CalendarDays,
-  UserCog,
   UserMinus,
   Crown,
   FileText,
@@ -35,29 +34,28 @@ import {
   ExternalLink,
   Pencil,
 } from "lucide-react"
-import type { User } from "@supabase/supabase-js"
 
 interface Department {
   id: string
   name: string
   description: string | null
   max_members: number | null
-  created_at: string
+  created_at: string | null
 }
 
 interface Member {
   id: string
-  full_name: string
+  full_name: string | null
   student_id: string | null
   role: string
-  created_at: string
+  created_at: string | null
 }
 
 interface Activity {
   id: string
   title: string
   status: string
-  start_time: string
+  start_time: string | null
   end_time: string | null
 }
 
@@ -72,7 +70,6 @@ export default function DepartmentDetailPage({
   const [activities, setActivities] = useState<Activity[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [user, setUser] = useState<User | null>(null)
   const [userRole, setUserRole] = useState<string>("applicant")
   const [userDepartmentId, setUserDepartmentId] = useState<string | null>(null)
 
@@ -106,8 +103,6 @@ export default function DepartmentDetailPage({
     async function load() {
       try {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
-        setUser(currentUser)
-
         // Load department info
         const { data: deptData, error: deptError } = await supabase
           .from("departments")
@@ -122,6 +117,8 @@ export default function DepartmentDetailPage({
         }
         setDepartment(deptData)
 
+        let canViewMembers = false
+
         // Load user profile
         if (currentUser) {
           const { data: profileData } = await supabase
@@ -135,17 +132,19 @@ export default function DepartmentDetailPage({
           }
           if (profileData?.role) {
             setUserRole(profileData.role)
+            canViewMembers = profileData.role !== "applicant"
           }
         }
 
-        // Load members
-        const { data: memberData } = await supabase
-          .from("profiles")
-          .select("id, full_name, student_id, role, created_at")
-          .eq("department_id", departmentId)
-          .order("created_at", { ascending: true })
+        if (canViewMembers) {
+          const { data: memberData } = await supabase
+            .from("profiles")
+            .select("id, full_name, student_id, role, created_at")
+            .eq("department_id", departmentId)
+            .order("created_at", { ascending: true })
 
-        setMembers(memberData || [])
+          setMembers(memberData || [])
+        }
 
         // Load department activities (recent 5)
         const { data: activityData } = await supabase
@@ -166,8 +165,12 @@ export default function DepartmentDetailPage({
     load()
   }, [departmentId])
 
-  const canManage = userRole === "admin" || (userRole === "minister" && userDepartmentId === departmentId)
-  const isMember = userDepartmentId === departmentId
+  const canManage =
+    userRole === "admin" ||
+    userRole === "secretary" ||
+    (userRole === "minister" && userDepartmentId === departmentId)
+  const canAppointMinister = userRole === "admin" || userRole === "secretary"
+  const canViewMembers = userRole !== "applicant"
   const ministers = members.filter((m) => m.role === "minister")
 
   // Remove member
@@ -181,10 +184,10 @@ export default function DepartmentDetailPage({
     setRemoveLoading(true)
     const supabase = supabaseRef.current
 
-    const { error } = await supabase
-      .from("profiles")
-      .update({ department_id: null, role: "applicant" })
-      .eq("id", removingMember.id)
+    const { error } = await supabase.rpc("remove_department_member", {
+      p_department_id: departmentId,
+      p_user_id: removingMember.id,
+    })
 
     if (error) {
       toast.add({ type: "error", title: "操作失败", description: error.message })
@@ -207,20 +210,10 @@ export default function DepartmentDetailPage({
     setPromoteLoading(true)
     const supabase = supabaseRef.current
 
-    // 1. Demote current minister(s) to member
-    if (ministers.length > 0) {
-      const ministerIds = ministers.map((m) => m.id)
-      await supabase
-        .from("profiles")
-        .update({ role: "member" })
-        .in("id", ministerIds)
-    }
-
-    // 2. Promote selected member
-    const { error } = await supabase
-      .from("profiles")
-      .update({ role: "minister" })
-      .eq("id", promotingMember.id)
+    const { error } = await supabase.rpc("promote_department_minister", {
+      p_department_id: departmentId,
+      p_user_id: promotingMember.id,
+    })
 
     if (error) {
       toast.add({ type: "error", title: "操作失败", description: error.message })
@@ -263,14 +256,12 @@ export default function DepartmentDetailPage({
     setEditSubmitting(true)
     setEditError(null)
     const supabase = supabaseRef.current
-    const { error } = await supabase
-      .from("departments")
-      .update({
-        name: editName.trim(),
-        description: editDescription.trim() || null,
-        max_members: maxMembersNum,
-      })
-      .eq("id", department.id)
+    const { error } = await supabase.rpc("update_department", {
+      p_department_id: department.id,
+      p_name: editName.trim(),
+      p_description: editDescription.trim() || null,
+      p_max_members: maxMembersNum,
+    })
 
     if (error) {
       setEditError(error.message)
@@ -381,38 +372,48 @@ export default function DepartmentDetailPage({
       />
 
       {/* Info Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">当前人数</CardTitle>
-            <Users className="size-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-medium">{members.length}</div>
-            {department.max_members && (
-              <p className="text-xs text-muted-foreground mt-1">
-                上限 {department.max_members} 人
-              </p>
-            )}
-          </CardContent>
-        </Card>
+      <div
+        className={
+          canViewMembers
+            ? "grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+            : "grid gap-4 sm:grid-cols-2"
+        }
+      >
+        {canViewMembers && (
+          <>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">当前人数</CardTitle>
+                <Users className="size-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-medium">{members.length}</div>
+                {department.max_members && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    上限 {department.max_members} 人
+                  </p>
+                )}
+              </CardContent>
+            </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">部长</CardTitle>
-            <Crown className="size-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-sm font-medium">
-              {ministers.length > 0
-                ? ministers.map((m) => m.full_name).join("、")
-                : "暂无部长"}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {ministers.length} 位部长
-            </p>
-          </CardContent>
-        </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">部长</CardTitle>
+                <Crown className="size-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm font-medium">
+                  {ministers.length > 0
+                    ? ministers.map((m) => m.full_name || "未命名成员").join("、")
+                    : "暂无部长"}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {ministers.length} 位部长
+                </p>
+              </CardContent>
+            </Card>
+          </>
+        )}
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -441,101 +442,103 @@ export default function DepartmentDetailPage({
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Members Section */}
-        <Card className="lg:col-span-2">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="text-lg">部门成员</CardTitle>
-              <CardDescription>
-                共 {members.length} 位成员
-                {canManage && (
-                  <Link
-                    href={`/dashboard/applications?department=${departmentId}`}
-                    className="ml-2 text-primary hover:underline"
-                  >
-                    查看入部申请
-                  </Link>
-                )}
-              </CardDescription>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {members.length === 0 ? (
-              <EmptyState
-                icon={<Users className="size-10" />}
-                title="暂无成员"
-                description="该部门还没有成员加入"
-              />
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>姓名</TableHead>
-                    <TableHead>学号</TableHead>
-                    <TableHead>角色</TableHead>
-                    <TableHead>加入时间</TableHead>
-                    {canManage && <TableHead className="text-right">操作</TableHead>}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {members.map((member) => (
-                    <TableRow key={member.id}>
-                      <TableCell className="font-medium">{member.full_name}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {member.student_id || "-"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={member.role === "minister" ? "default" : "secondary"}
-                          className="text-xs"
-                        >
-                          {member.role === "minister" && <Crown className="size-3 mr-1" />}
-                          {member.role === "minister"
-                            ? "部长"
-                            : member.role === "member"
-                            ? "成员"
-                            : member.role}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">
-                        {formatDate(member.created_at)}
-                      </TableCell>
-                      {canManage && (
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            {/* Can only remove members, not ministers */}
-                            {member.role === "member" && (
-                              <Button
-                                variant="ghost"
-                                size="default"
-                                className="h-7 gap-1 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
-                                onClick={() => handleRemoveOpen(member)}
-                              >
-                                <UserMinus className="size-3.5" />
-                                移除
-                              </Button>
-                            )}
-                            {/* Admin can promote to minister */}
-                            {member.role !== "minister" && (
-                              <Button
-                                variant="ghost"
-                                size="default"
-                                className="h-7 gap-1 text-xs"
-                                onClick={() => handlePromoteOpen(member)}
-                              >
-                                <Crown className="size-3.5" />
-                                设为部长
-                              </Button>
-                            )}
-                          </div>
-                        </TableCell>
-                      )}
+        {canViewMembers && (
+          <Card className="lg:col-span-2">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-lg">部门成员</CardTitle>
+                <CardDescription>
+                  共 {members.length} 位成员
+                  {canManage && (
+                    <Link
+                      href={`/dashboard/applications?department=${departmentId}`}
+                      className="ml-2 text-primary hover:underline"
+                    >
+                      查看入部申请
+                    </Link>
+                  )}
+                </CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {members.length === 0 ? (
+                <EmptyState
+                  icon={<Users className="size-10" />}
+                  title="暂无成员"
+                  description="该部门还没有成员加入"
+                />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>姓名</TableHead>
+                      <TableHead>学号</TableHead>
+                      <TableHead>角色</TableHead>
+                      <TableHead>加入时间</TableHead>
+                      {canManage && <TableHead className="text-right">操作</TableHead>}
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
+                  </TableHeader>
+                  <TableBody>
+                    {members.map((member) => (
+                      <TableRow key={member.id}>
+                        <TableCell className="font-medium">{member.full_name || "未命名成员"}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {member.student_id || "-"}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={member.role === "minister" ? "default" : "secondary"}
+                            className="text-xs"
+                          >
+                            {member.role === "minister" && <Crown className="size-3 mr-1" />}
+                            {member.role === "minister"
+                              ? "部长"
+                              : member.role === "member"
+                              ? "成员"
+                              : member.role}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-sm">
+                          {formatDate(member.created_at)}
+                        </TableCell>
+                        {canManage && (
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              {/* Can only remove members, not ministers */}
+                              {member.role === "member" && (
+                                <Button
+                                  variant="ghost"
+                                  size="default"
+                                  className="h-7 gap-1 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={() => handleRemoveOpen(member)}
+                                >
+                                  <UserMinus className="size-3.5" />
+                                  移除
+                                </Button>
+                              )}
+                              {/* Only system-level management can appoint a minister. */}
+                              {canAppointMinister && member.role !== "minister" && (
+                                <Button
+                                  variant="ghost"
+                                  size="default"
+                                  className="h-7 gap-1 text-xs"
+                                  onClick={() => handlePromoteOpen(member)}
+                                >
+                                  <Crown className="size-3.5" />
+                                  设为部长
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Activities Section */}
         <Card className="lg:col-span-2">

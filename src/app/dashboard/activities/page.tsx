@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent } from "@/components/ui/card"
@@ -63,11 +63,12 @@ const statusLabel: Record<string, string> = {
 
 export default function ActivitiesPage() {
   const [activities, setActivities] = useState<Activity[]>([])
-  const [filteredActivities, setFilteredActivities] = useState<Activity[]>([])
   const [filterStatus, setFilterStatus] = useState("all")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<User | null>(null)
+  const [userRole, setUserRole] = useState<string | null>(null)
+  const [userDepartmentId, setUserDepartmentId] = useState<string | null>(null)
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
 
   // Create activity dialog state
@@ -108,7 +109,6 @@ export default function ActivitiesPage() {
 
     const activityList = (activityData || []) as unknown as Activity[]
     setActivities(activityList)
-    setFilteredActivities(activityList)
 
     // Step 2: Fetch all profiles for name map
     const { data: profileData } = await supabase
@@ -118,7 +118,7 @@ export default function ActivitiesPage() {
     const profilesList = (profileData || []) as ProfileOption[]
     const map: Record<string, string> = {}
     for (const p of profilesList) {
-      map[p.id] = p.full_name || p.id
+      map[p.id] = p.full_name || "未命名成员"
     }
     setUserNameMap(map)
   }
@@ -133,6 +133,15 @@ export default function ActivitiesPage() {
       try {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
         setUser(currentUser)
+        if (currentUser) {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role, department_id")
+            .eq("id", currentUser.id)
+            .maybeSingle()
+          setUserRole(profile?.role ?? null)
+          setUserDepartmentId(profile?.department_id ?? null)
+        }
         await loadActivities()
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败")
@@ -144,27 +153,25 @@ export default function ActivitiesPage() {
     load()
   }, [])
 
-  useEffect(() => {
-    if (filterStatus === "all") {
-      setFilteredActivities(activities)
-    } else {
-      setFilteredActivities(activities.filter((a) => a.status === filterStatus))
-    }
-  }, [filterStatus, activities])
+  const filteredActivities = useMemo(
+    () =>
+      filterStatus === "all"
+        ? activities
+        : activities.filter((activity) => activity.status === filterStatus),
+    [activities, filterStatus]
+  )
 
   const getOrganizerName = (userId: string) => {
-    return userNameMap[userId] || userId
+    return userNameMap[userId] || "未公开"
   }
 
   const handleSubmitForApproval = async (activityId: string) => {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { data: updatedData, error: updateError } = await supabase
-      .from("activities")
-      .update({ status: "pending_approval" })
-      .eq("id", activityId)
-      .select()
+    const { error: updateError } = await supabase.rpc("submit_activity_for_approval", {
+      p_activity_id: activityId,
+    })
 
     if (updateError) {
       console.error("Submit for approval error:", updateError)
@@ -193,10 +200,10 @@ export default function ActivitiesPage() {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error: updateError } = await supabase
-      .from("activities")
-      .update({ status: "completed" })
-      .eq("id", activityId)
+    const { error: updateError } = await supabase.rpc("set_activity_lifecycle_status", {
+      p_activity_id: activityId,
+      p_status: "completed",
+    })
 
     if (updateError) {
       toast.add({
@@ -233,15 +240,13 @@ export default function ActivitiesPage() {
     setSummarySubmitting(true)
     const supabase = supabaseRef.current
 
-    // Insert into activity_reports table
-    const { error: insertError } = await supabase
-      .from("activity_reports")
-      .insert({
-        activity_id: summaryTargetId,
-        summary: summaryContent.trim(),
-        participant_count: parseInt(summaryParticipantCount) || 0,
-        submitted_by: user.id,
-      })
+    const { error: insertError } = await supabase.rpc("submit_activity_report", {
+      p_activity_id: summaryTargetId,
+      p_summary: summaryContent.trim(),
+      p_participant_count: parseInt(summaryParticipantCount) || 0,
+      p_photos: [],
+      p_attachments: [],
+    })
 
     if (insertError) {
       toast.add({
@@ -275,16 +280,14 @@ export default function ActivitiesPage() {
     setSubmitting(true)
     const supabase = supabaseRef.current
 
-    const { error: insertError } = await supabase.from("activities").insert({
-      title: newTitle.trim(),
-      description: newDescription.trim() || null,
-      location: newLocation.trim() || null,
-      start_time: newStartTime || null,
-      end_time: newEndTime || null,
-      budget: newBudget ? Number(newBudget) : null,
-      max_participants: newMaxParticipants ? Number(newMaxParticipants) : null,
-      organizer_id: user.id,
-      status: "draft",
+    const { error: insertError } = await supabase.rpc("create_activity", {
+      p_title: newTitle.trim(),
+      p_description: newDescription.trim() || null,
+      p_location: newLocation.trim() || null,
+      p_start_time: newStartTime || null,
+      p_end_time: newEndTime || null,
+      p_budget: newBudget ? Number(newBudget) : null,
+      p_max_participants: newMaxParticipants ? Number(newMaxParticipants) : null,
     })
 
     if (insertError) {
@@ -321,7 +324,7 @@ export default function ActivitiesPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">活动管理</h1>
+        <h1 className="text-2xl font-bold">活动管理</h1>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">状态筛选：</span>
@@ -338,10 +341,12 @@ export default function ActivitiesPage() {
               </SelectContent>
             </Select>
           </div>
-          <Button onClick={() => setDialogOpen(true)}>
-            <Plus className="mr-1.5 size-4" />
-            新建活动
-          </Button>
+          {userRole && userRole !== "applicant" && (
+            <Button onClick={() => setDialogOpen(true)}>
+              <Plus className="mr-1.5 size-4" />
+              新建活动
+            </Button>
+          )}
         </div>
       </div>
 
@@ -412,7 +417,8 @@ export default function ActivitiesPage() {
                   <TableCell>{getOrganizerName(activity.organizer_id)}</TableCell>
                   <TableCell>
                     <div className="flex gap-2">
-                      {activity.status === "draft" && (
+                      {activity.status === "draft" &&
+                        (activity.organizer_id === user?.id || userRole === "admin" || userRole === "secretary") && (
                         <Button
                           size="sm"
                           onClick={() => handleSubmitForApproval(activity.id)}
@@ -421,7 +427,11 @@ export default function ActivitiesPage() {
                           提交审批
                         </Button>
                       )}
-                      {activity.status === "approved" && (
+                      {activity.status === "approved" &&
+                        (activity.organizer_id === user?.id ||
+                          userRole === "admin" ||
+                          userRole === "secretary" ||
+                          (userRole === "minister" && activity.department_id === userDepartmentId)) && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -432,7 +442,11 @@ export default function ActivitiesPage() {
                           标记完成
                         </Button>
                       )}
-                      {activity.status === "completed" && (
+                      {activity.status === "completed" &&
+                        (activity.organizer_id === user?.id ||
+                          userRole === "admin" ||
+                          userRole === "secretary" ||
+                          (userRole === "minister" && activity.department_id === userDepartmentId)) && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -458,7 +472,7 @@ export default function ActivitiesPage() {
           <DialogHeader>
             <DialogTitle>新建活动</DialogTitle>
             <DialogDescription>
-              创建一个新活动并发布到活动列表
+              创建活动草稿，审批通过后面向全体受邀用户开放
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

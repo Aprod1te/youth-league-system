@@ -21,7 +21,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { toast } from "@/components/ui/toast"
 import { Calendar, ClipboardList, UserPlus, ExternalLink } from "lucide-react"
-import type { User as SupabaseUser } from "@supabase/supabase-js"
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -60,18 +59,6 @@ interface PendingApplication {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
-const activityStatusBadge: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  pending_approval: "secondary",
-  approved: "outline",
-  rejected: "destructive",
-}
-
-const activityStatusLabel: Record<string, string> = {
-  pending_approval: "待审批",
-  approved: "已通过",
-  rejected: "已拒绝",
-}
-
 const priorityBadgeVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   low: "secondary",
   medium: "outline",
@@ -100,8 +87,6 @@ const appStatusLabel: Record<string, string> = {
 
 export default function ReviewPage() {
   const router = useRouter()
-  const [user, setUser] = useState<SupabaseUser | null>(null)
-  const [userRole, setUserRole] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState("all")
@@ -137,16 +122,15 @@ export default function ReviewPage() {
           router.push("/login")
           return
         }
-        setUser(currentUser)
-
         const { data: profileData } = await supabase
           .from("profiles")
           .select("role")
           .eq("id", currentUser.id)
           .maybeSingle()
 
-        if (profileData?.role) {
-          setUserRole(profileData.role)
+        if (profileData?.role !== "admin" && profileData?.role !== "secretary") {
+          router.push("/dashboard")
+          return
         }
 
         // Fetch all pending items in parallel
@@ -220,9 +204,9 @@ export default function ReviewPage() {
           deptMap[d.id] = d.name
         }
         setDeptNameMap(deptMap)
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("加载审核汇总数据失败:", err)
-        setError(err.message || "加载失败")
+        setError(err instanceof Error ? err.message : "加载失败")
       } finally {
         setLoading(false)
       }
@@ -237,27 +221,16 @@ export default function ReviewPage() {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error: updateError } = await supabase
-      .from("activities")
-      .update({ status: "approved", approved_by: user?.id || null })
-      .eq("id", id)
+    const { error: updateError } = await supabase.rpc("review_activity", {
+      p_activity_id: id,
+      p_decision: "approved",
+      p_note: null,
+    })
 
     if (updateError) {
       toast.add({ type: "error", title: "操作失败", description: updateError.message })
       setActionLoading(false)
       return
-    }
-
-    const target = activities.find((a) => a.id === id)
-    if (target) {
-      await supabase.from("notifications").insert({
-        user_id: target.organizer_id,
-        title: "活动已通过审批",
-        content: `你的活动"${target.title}"已通过审批。`,
-        type: "activity",
-        related_id: id,
-        is_read: false,
-      })
     }
 
     toast.add({ type: "success", title: "审批通过", description: "已通过该活动审批" })
@@ -269,31 +242,16 @@ export default function ReviewPage() {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error: updateError } = await supabase
-      .from("tasks")
-      .update({
-        approval_status: "approved",
-        approved_by: user?.id || null,
-        approved_at: new Date().toISOString(),
-      })
-      .eq("id", id)
+    const { error: updateError } = await supabase.rpc("review_task", {
+      p_task_id: id,
+      p_decision: "approved",
+      p_note: null,
+    })
 
     if (updateError) {
       toast.add({ type: "error", title: "操作失败", description: updateError.message })
       setActionLoading(false)
       return
-    }
-
-    const target = tasks.find((t) => t.id === id)
-    if (target) {
-      await supabase.from("notifications").insert({
-        user_id: target.created_by,
-        title: "任务已通过审批",
-        content: `你的任务"${target.title}"已通过审批。`,
-        type: "task",
-        related_id: id,
-        is_read: false,
-      })
     }
 
     toast.add({ type: "success", title: "审批通过", description: "已通过该任务审批" })
@@ -305,27 +263,16 @@ export default function ReviewPage() {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error: updateError } = await supabase
-      .from("applications")
-      .update({ status: "approved", reviewed_by: user?.id || null })
-      .eq("id", id)
+    const { error: updateError } = await supabase.rpc("review_application", {
+      p_application_id: id,
+      p_decision: "approved",
+      p_note: null,
+    })
 
     if (updateError) {
       toast.add({ type: "error", title: "操作失败", description: updateError.message })
       setActionLoading(false)
       return
-    }
-
-    const target = applications.find((a) => a.id === id)
-    if (target) {
-      await supabase.from("notifications").insert({
-        user_id: target.user_id,
-        title: "入部申请已通过",
-        content: "你的入部申请已通过审批，欢迎加入！",
-        type: "application",
-        related_id: id,
-        is_read: false,
-      })
     }
 
     toast.add({ type: "success", title: "审批通过", description: "已通过该入部申请" })
@@ -343,59 +290,34 @@ export default function ReviewPage() {
     if (!rejectTarget) return
     setActionLoading(true)
     const supabase = supabaseRef.current
-    const { type, id, title, userId } = rejectTarget
+    const { type, id } = rejectTarget
 
     if (type === "activity") {
-      const { error } = await supabase
-        .from("activities")
-        .update({
-          status: "rejected",
-          approval_note: rejectNote.trim() || null,
-          approved_by: user?.id || null,
-        })
-        .eq("id", id)
+      const { error } = await supabase.rpc("review_activity", {
+        p_activity_id: id,
+        p_decision: "rejected",
+        p_note: rejectNote.trim() || null,
+      })
 
       if (error) {
         toast.add({ type: "error", title: "操作失败", description: error.message })
         setActionLoading(false)
         return
       }
-
-      await supabase.from("notifications").insert({
-        user_id: userId,
-        title: "活动审批未通过",
-        content: `你的活动"${title}"未通过审批，原因：${rejectNote.trim() || "不符合要求"}`,
-        type: "activity",
-        related_id: id,
-        is_read: false,
-      })
 
       setActivities((prev) => prev.filter((a) => a.id !== id))
     } else if (type === "task") {
-      const { error } = await supabase
-        .from("tasks")
-        .update({
-          approval_status: "rejected",
-          approval_note: rejectNote.trim() || null,
-          approved_by: user?.id || null,
-          approved_at: new Date().toISOString(),
-        })
-        .eq("id", id)
+      const { error } = await supabase.rpc("review_task", {
+        p_task_id: id,
+        p_decision: "rejected",
+        p_note: rejectNote.trim() || null,
+      })
 
       if (error) {
         toast.add({ type: "error", title: "操作失败", description: error.message })
         setActionLoading(false)
         return
       }
-
-      await supabase.from("notifications").insert({
-        user_id: userId,
-        title: "任务审批未通过",
-        content: `你的任务"${title}"未通过审批，原因：${rejectNote.trim() || "不符合要求"}`,
-        type: "task",
-        related_id: id,
-        is_read: false,
-      })
 
       setTasks((prev) => prev.filter((t) => t.id !== id))
     }
@@ -433,7 +355,7 @@ export default function ReviewPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">审核汇总</h1>
+        <h1 className="text-2xl font-bold">审核汇总</h1>
         <Badge variant="outline" className="text-sm">
           共 {totalPending} 条待处理
         </Badge>

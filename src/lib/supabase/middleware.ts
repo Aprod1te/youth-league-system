@@ -1,12 +1,14 @@
 import { createServerClient } from "@supabase/ssr"
 import { type NextRequest, NextResponse } from "next/server"
+import type { Database } from "@/lib/database.types"
+import { resolveSafeRedirectPath } from "@/lib/navigation"
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   })
 
-  const supabase = createServerClient(
+  const supabase = createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -37,25 +39,38 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // Protect dashboard routes
+  const isInviteAcceptance = request.nextUrl.pathname === "/accept-invite"
+
+  // Protect application routes and invitation completion.
   if (
     !user &&
-    request.nextUrl.pathname.startsWith("/dashboard")
+    (request.nextUrl.pathname.startsWith("/dashboard") || isInviteAcceptance)
   ) {
     const url = request.nextUrl.clone()
     url.pathname = "/login"
+    url.search = ""
+    if (isInviteAcceptance) {
+      url.searchParams.set("error", "invalid_auth_link")
+    } else {
+      url.searchParams.set("next", `${request.nextUrl.pathname}${request.nextUrl.search}`)
+    }
     return NextResponse.redirect(url)
   }
 
-  // Redirect authenticated users away from auth pages
+  const unauthenticatedOnlyRoutes = new Set([
+    "/login",
+    "/register",
+    "/forgot-password",
+  ])
+
+  // Redirect authenticated users away from pages intended for signed-out users.
   if (
     user &&
-    (request.nextUrl.pathname.startsWith("/login") ||
-      request.nextUrl.pathname.startsWith("/register"))
+    unauthenticatedOnlyRoutes.has(request.nextUrl.pathname)
   ) {
-    const url = request.nextUrl.clone()
-    url.pathname = "/dashboard"
-    return NextResponse.redirect(url)
+    const nextPath = request.nextUrl.searchParams.get("next")
+    const destination = resolveSafeRedirectPath(nextPath)
+    return NextResponse.redirect(new URL(destination, request.url))
   }
 
   return supabaseResponse

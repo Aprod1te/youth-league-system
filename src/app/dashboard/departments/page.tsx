@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useState, useRef } from "react"
-import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -13,7 +12,7 @@ import { toast } from "@/components/ui/toast"
 import { PageHeader } from "@/components/ui/page-header"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
-import { Building2, Users, CheckCircle2, Clock3, Pencil, Trash2, ArrowRight, Search, X, MoreHorizontal } from "lucide-react"
+import { Building2, Users, CheckCircle2, Clock3, Pencil, Trash2, Search, X, MoreHorizontal } from "lucide-react"
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import type { User } from "@supabase/supabase-js"
 
@@ -133,11 +132,9 @@ export default function DepartmentsPage() {
 
     setSubmitting(true)
     const supabase = supabaseRef.current
-    const { error } = await supabase.from("applications").insert({
-      user_id: user.id,
-      department_id: selectedDept.id,
-      reason: reason.trim(),
-      status: "pending",
+    const { error } = await supabase.rpc("apply_to_department", {
+      p_department_id: selectedDept.id,
+      p_reason: reason.trim(),
     })
 
     if (error) {
@@ -175,14 +172,12 @@ export default function DepartmentsPage() {
     setEditSubmitting(true)
     setEditError(null)
     const supabase = supabaseRef.current
-    const { error } = await supabase
-      .from("departments")
-      .update({
-        name: editName.trim(),
-        description: editDescription.trim() || null,
-        max_members: maxMembersNum,
-      })
-      .eq("id", editingDept.id)
+    const { error } = await supabase.rpc("update_department", {
+      p_department_id: editingDept.id,
+      p_name: editName.trim(),
+      p_description: editDescription.trim() || null,
+      p_max_members: maxMembersNum,
+    })
 
     if (error) {
       setEditError(error.message)
@@ -211,17 +206,9 @@ export default function DepartmentsPage() {
     setDeleteSubmitting(true)
     const supabase = supabaseRef.current
 
-    // Remove members from this department first
-    await supabase
-      .from("profiles")
-      .update({ department_id: null, role: "applicant" })
-      .eq("department_id", deletingDept.id)
-
-    // Delete department
-    const { error } = await supabase
-      .from("departments")
-      .delete()
-      .eq("id", deletingDept.id)
+    const { error } = await supabase.rpc("delete_department", {
+      p_department_id: deletingDept.id,
+    })
 
     if (error) {
       toast.add({ type: "error", title: "删除失败", description: error.message })
@@ -241,6 +228,9 @@ export default function DepartmentsPage() {
   const getButtonState = (deptId: string): { label: string; disabled: boolean; variant?: "default" | "outline" | "secondary"; icon?: React.ReactNode; onClick: (() => void) | undefined } => {
     if (userDepartmentId === deptId) {
       return { label: "已加入", disabled: true, variant: "secondary", icon: <CheckCircle2 className="size-4" />, onClick: undefined }
+    }
+    if (userDepartmentId) {
+      return { label: "已加入其他部门", disabled: true, variant: "secondary", icon: <CheckCircle2 className="size-4" />, onClick: undefined }
     }
     const appStatus = applicationStatusMap[deptId]
     if (appStatus === "pending") {
@@ -335,7 +325,7 @@ export default function DepartmentsPage() {
                     <div className="flex size-12 items-center justify-center rounded-xl bg-primary/10">
                       <Building2 className="size-6 text-primary" />
                     </div>
-                    {(userRole === "admin" || isMinisterOf(dept.id)) && (
+                    {(userRole === "admin" || userRole === "secretary" || isMinisterOf(dept.id)) && (
                       <DropdownMenu>
                           <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground size-8 cursor-pointer">
                             <MoreHorizontal className="size-4" />
@@ -345,13 +335,15 @@ export default function DepartmentsPage() {
                             <Pencil className="size-4 mr-2" />
                             编辑
                           </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => handleDeleteOpen(dept)}
-                            className="text-destructive focus:text-destructive"
-                          >
-                            <Trash2 className="size-4 mr-2" />
-                            删除
-                          </DropdownMenuItem>
+                          {(userRole === "admin" || userRole === "secretary") && (
+                            <DropdownMenuItem
+                              onClick={() => handleDeleteOpen(dept)}
+                              className="text-destructive focus:text-destructive"
+                            >
+                              <Trash2 className="size-4 mr-2" />
+                              删除
+                            </DropdownMenuItem>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}

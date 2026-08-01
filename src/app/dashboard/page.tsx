@@ -3,39 +3,44 @@
 import { useEffect, useState, useRef } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { EmptyState } from "@/components/ui/empty-state"
 import Link from "next/link"
 import {
-  LayoutDashboard,
   Users,
   Calendar,
   ClipboardList,
   Building2,
-  Bell,
   ArrowRight,
   TrendingUp,
-  Clock,
   Activity,
 } from "lucide-react"
 import type { User as SupabaseUser } from "@supabase/supabase-js"
+import type { Database } from "@/lib/database.types"
+
+type ActivitySummary = Pick<
+  Database["public"]["Tables"]["activities"]["Row"],
+  "id" | "start_time" | "status" | "title"
+>
+
+type TaskSummary = Pick<
+  Database["public"]["Tables"]["tasks"]["Row"],
+  "deadline" | "id" | "status" | "title"
+>
 
 interface StatsData {
   totalMembers: number
   totalDepartments: number
   totalActivities: number
   totalTasks: number
-  recentActivities: any[]
-  recentTasks: any[]
-  notifications: any[]
+  recentActivities: ActivitySummary[]
+  recentTasks: TaskSummary[]
 }
 
 export default function DashboardPage() {
   const [user, setUser] = useState<SupabaseUser | null>(null)
-  const [userRole, setUserRole] = useState<string>("applicant")
+  const [userRole, setUserRole] = useState("applicant")
   const [stats, setStats] = useState<StatsData>({
     totalMembers: 0,
     totalDepartments: 0,
@@ -43,7 +48,6 @@ export default function DashboardPage() {
     totalTasks: 0,
     recentActivities: [],
     recentTasks: [],
-    notifications: [],
   })
   const [loading, setLoading] = useState(true)
   const supabaseRef = useRef(createClient())
@@ -57,17 +61,16 @@ export default function DashboardPage() {
       setUser(currentUser)
 
       if (currentUser) {
-        const { data: profileData } = await supabase
-          .from("profiles")
-          .select("role, department_id")
-          .eq("id", currentUser.id)
-          .maybeSingle()
-
-        const role = profileData?.role || "applicant"
-        setUserRole(role)
-
-        // Load stats
         try {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", currentUser.id)
+            .maybeSingle()
+          const role = profile?.role || "applicant"
+          const isApplicant = role === "applicant"
+          setUserRole(role)
+
           const [
             { count: memberCount },
             { count: deptCount },
@@ -75,15 +78,27 @@ export default function DashboardPage() {
             { count: taskCount },
             { data: activities },
             { data: tasks },
-            { data: notifs },
           ] = await Promise.all([
-            supabase.from("profiles").select("*", { count: "exact", head: true }).eq("role", "member"),
+            isApplicant
+              ? Promise.resolve({ count: 0 })
+              : supabase.from("profiles").select("id", { count: "exact", head: true }).neq("role", "applicant"),
             supabase.from("departments").select("*", { count: "exact", head: true }),
             supabase.from("activities").select("*", { count: "exact", head: true }),
-            supabase.from("tasks").select("*", { count: "exact", head: true }),
-            supabase.from("activities").select("*").order("created_at", { ascending: false }).limit(5),
-            supabase.from("tasks").select("*").order("created_at", { ascending: false }).limit(5),
-            supabase.from("notifications").select("*").eq("user_id", currentUser.id).order("created_at", { ascending: false }).limit(5),
+            isApplicant
+              ? Promise.resolve({ count: 0 })
+              : supabase.from("tasks").select("*", { count: "exact", head: true }),
+            supabase
+              .from("activities")
+              .select("id, start_time, status, title")
+              .order("created_at", { ascending: false })
+              .limit(5),
+            isApplicant
+              ? Promise.resolve({ data: [] as TaskSummary[] })
+              : supabase
+                  .from("tasks")
+                  .select("deadline, id, status, title")
+                  .order("created_at", { ascending: false })
+                  .limit(5),
           ])
 
           setStats({
@@ -93,7 +108,6 @@ export default function DashboardPage() {
             totalTasks: taskCount || 0,
             recentActivities: activities || [],
             recentTasks: tasks || [],
-            notifications: notifs || [],
           })
         } catch (err) {
           console.error("Failed to load stats:", err)
@@ -138,7 +152,7 @@ export default function DashboardPage() {
       bgColor: "bg-purple-500/10",
       href: "/dashboard/tasks",
     },
-  ]
+  ].filter((stat) => userRole !== "applicant" || ["部门数量", "活动总数"].includes(stat.label))
 
   if (loading) {
     return (
@@ -188,7 +202,7 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className={`grid gap-6 ${userRole === "applicant" ? "" : "lg:grid-cols-2"}`}>
         {/* Recent activities */}
         <Card>
           <CardContent className="p-6">
@@ -209,11 +223,11 @@ export default function DashboardPage() {
               <EmptyState
                 title="暂无活动"
                 description="还没有创建任何活动"
-                action={{ label: "创建活动", href: "/dashboard/activities" }}
+                action={{ label: "查看活动", href: "/dashboard/activities" }}
               />
             ) : (
               <div className="space-y-3">
-                {stats.recentActivities.map((activity: any) => (
+                {stats.recentActivities.map((activity) => (
                   <Link
                     key={activity.id}
                     href={`/dashboard/activities/${activity.id}`}
@@ -236,7 +250,7 @@ export default function DashboardPage() {
         </Card>
 
         {/* Recent tasks */}
-        <Card>
+        {userRole !== "applicant" && <Card>
           <CardContent className="p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
@@ -259,7 +273,7 @@ export default function DashboardPage() {
               />
             ) : (
               <div className="space-y-3">
-                {stats.recentTasks.map((task: any) => (
+                {stats.recentTasks.map((task) => (
                   <Link
                     key={task.id}
                     href={`/dashboard/tasks/${task.id}`}
@@ -268,8 +282,8 @@ export default function DashboardPage() {
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium truncate">{task.title}</p>
                       <p className="text-xs text-muted-foreground">
-                        {task.due_date
-                          ? "截止 " + new Date(task.due_date).toLocaleDateString("zh-CN")
+                        {task.deadline
+                          ? "截止 " + new Date(task.deadline).toLocaleDateString("zh-CN")
                           : "无截止日期"}
                       </p>
                     </div>
@@ -279,7 +293,7 @@ export default function DashboardPage() {
               </div>
             )}
           </CardContent>
-        </Card>
+        </Card>}
       </div>
     </div>
   )

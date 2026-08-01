@@ -11,7 +11,6 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { toast } from "@/components/ui/toast"
-import type { User as SupabaseUser } from "@supabase/supabase-js"
 
 interface TaskItem {
   id: string
@@ -46,8 +45,6 @@ export default function TaskApprovalPage() {
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [user, setUser] = useState<SupabaseUser | null>(null)
-  const [userRole, setUserRole] = useState<string | null>(null)
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
 
   // Reject dialog
@@ -72,8 +69,6 @@ export default function TaskApprovalPage() {
           router.push("/login")
           return
         }
-        setUser(currentUser)
-
         // Get user role
         const { data: profileData } = await supabase
           .from("profiles")
@@ -81,8 +76,9 @@ export default function TaskApprovalPage() {
           .eq("id", currentUser.id)
           .maybeSingle()
 
-        if (profileData?.role) {
-          setUserRole(profileData.role)
+        if (profileData?.role !== "admin" && profileData?.role !== "secretary") {
+          router.push("/dashboard")
+          return
         }
 
         // Fetch pending approval tasks
@@ -115,9 +111,9 @@ export default function TaskApprovalPage() {
           }
           setUserNameMap(nameMap)
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("加载任务审批数据失败:", err)
-        setError(err.message || "加载失败")
+        setError(err instanceof Error ? err.message : "加载失败")
       } finally {
         setLoading(false)
       }
@@ -130,14 +126,11 @@ export default function TaskApprovalPage() {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error: updateError } = await supabase
-      .from("tasks")
-      .update({
-        approval_status: "approved",
-        approved_by: user?.id || null,
-        approved_at: new Date().toISOString(),
-      })
-      .eq("id", taskId)
+    const { error: updateError } = await supabase.rpc("review_task", {
+      p_task_id: taskId,
+      p_decision: "approved",
+      p_note: null,
+    })
 
     if (updateError) {
       toast.add({
@@ -147,22 +140,6 @@ export default function TaskApprovalPage() {
       })
       setActionLoading(false)
       return
-    }
-
-    // Create notification for the creator
-    const targetTask = tasks.find((t) => t.id === taskId)
-    if (targetTask) {
-      const { error: notifError } = await supabase.from("notifications").insert({
-        user_id: targetTask.created_by,
-        title: "任务已通过审批",
-        content: `你的任务"${targetTask.title}"已通过审批。`,
-        type: "task",
-        related_id: taskId,
-        is_read: false,
-      })
-      if (notifError) {
-        console.error("创建通知失败:", notifError)
-      }
     }
 
     toast.add({
@@ -187,15 +164,11 @@ export default function TaskApprovalPage() {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error: updateError } = await supabase
-      .from("tasks")
-      .update({
-        approval_status: "rejected",
-        approval_note: rejectNote.trim() || null,
-        approved_by: user?.id || null,
-        approved_at: new Date().toISOString(),
-      })
-      .eq("id", rejectTargetId)
+    const { error: updateError } = await supabase.rpc("review_task", {
+      p_task_id: rejectTargetId,
+      p_decision: "rejected",
+      p_note: rejectNote.trim() || null,
+    })
 
     if (updateError) {
       toast.add({
@@ -205,22 +178,6 @@ export default function TaskApprovalPage() {
       })
       setActionLoading(false)
       return
-    }
-
-    // Create notification for the creator
-    const targetTask = tasks.find((t) => t.id === rejectTargetId)
-    if (targetTask) {
-      const { error: notifError } = await supabase.from("notifications").insert({
-        user_id: targetTask.created_by,
-        title: "任务审批未通过",
-        content: `你的任务"${targetTask.title}"未通过审批，原因：${rejectNote.trim() || "不符合要求"}`,
-        type: "task",
-        related_id: rejectTargetId,
-        is_read: false,
-      })
-      if (notifError) {
-        console.error("创建通知失败:", notifError)
-      }
     }
 
     toast.add({
@@ -242,7 +199,7 @@ export default function TaskApprovalPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">任务审批</h1>
+        <h1 className="text-2xl font-bold">任务审批</h1>
         <Badge variant="outline" className="text-sm">
           共 {tasks.length} 条待审批
         </Badge>

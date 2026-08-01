@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent } from "@/components/ui/card"
@@ -58,13 +58,10 @@ const statusLabel: Record<string, string> = {
 export default function ApplicationsPage() {
   const router = useRouter()
   const [applications, setApplications] = useState<Application[]>([])
-  const [filteredApplications, setFilteredApplications] = useState<Application[]>([])
   const [filterStatus, setFilterStatus] = useState("all")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<SupabaseUser | null>(null)
-  const [userRole, setUserRole] = useState<string | null>(null)
-  const [userDeptId, setUserDeptId] = useState<string | null>(null)
 
   // Name maps
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({})
@@ -106,9 +103,6 @@ export default function ApplicationsPage() {
             currentDeptId = profileData.department_id
           }
         }
-        setUserRole(currentRole)
-        setUserDeptId(currentDeptId)
-
         // Route guard: applicant and member cannot access this page
         if (currentRole === "applicant" || currentRole === "member") {
           router.push("/dashboard")
@@ -135,7 +129,6 @@ export default function ApplicationsPage() {
 
         const appList = (appData || []) as Application[]
         setApplications(appList)
-        setFilteredApplications(appList)
 
         // Step 2: Fetch profiles
         const { data: profileData } = await supabase
@@ -171,26 +164,25 @@ export default function ApplicationsPage() {
     }
 
     load()
-  }, [])
+  }, [router])
 
-  // Filter effect
-  useEffect(() => {
-    if (filterStatus === "all") {
-      setFilteredApplications(applications)
-    } else {
-      setFilteredApplications(applications.filter((a) => a.status === filterStatus))
-    }
-  }, [filterStatus, applications])
+  const filteredApplications = useMemo(
+    () =>
+      filterStatus === "all"
+        ? applications
+        : applications.filter((application) => application.status === filterStatus),
+    [applications, filterStatus]
+  )
 
-  const handleApprove = async (applicationId: string, app: Application) => {
+  const handleApprove = async (applicationId: string) => {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    // Update application status
-    const { error: updateError } = await supabase
-      .from("applications")
-      .update({ status: "approved", reviewed_by: user?.id || null })
-      .eq("id", applicationId)
+    const { error: updateError } = await supabase.rpc("review_application", {
+      p_application_id: applicationId,
+      p_decision: "approved",
+      p_note: null,
+    })
 
     if (updateError) {
       toast.add({
@@ -202,42 +194,13 @@ export default function ApplicationsPage() {
       return
     }
 
-    // Update profile: set department_id and role
-    const { error: profileError } = await supabase
-      .from("profiles")
-      .update({ department_id: app.department_id, role: "member" })
-      .eq("id", app.user_id)
-
-    if (profileError) {
-      console.error("更新用户资料失败:", profileError)
-      toast.add({
-        type: "error",
-        title: "更新用户信息失败",
-        description: profileError.message,
-      })
-      setActionLoading(false)
-      return
-    }
-
-    // Create notification for the applicant
-    console.log("正在创建通知给用户:", app.user_id)
-    const deptName = deptNameMap[app.department_id] || ""
-    const { error: notifError } = await supabase.from("notifications").insert({
-      user_id: app.user_id,
-      title: "入部申请已通过",
-      content: `恭喜！你的入部申请已通过审核，欢迎加入${deptName}！`,
-      type: "application",
-      related_id: app.id,
-      is_read: false,
-    })
-    if (notifError) {
-      console.error("创建通知失败:", notifError)
-    }
-
+    const approvedApplication = applications.find((application) => application.id === applicationId)
     toast.add({
       type: "success",
       title: "审核通过",
-      description: `已批准 ${userNameMap[app.user_id] || app.user_id} 的入部申请`,
+      description: approvedApplication
+        ? `已批准 ${userNameMap[approvedApplication.user_id] || approvedApplication.user_id} 的入部申请`
+        : "入部申请已通过",
     })
 
     // Update local state
@@ -259,14 +222,11 @@ export default function ApplicationsPage() {
     setActionLoading(true)
     const supabase = supabaseRef.current
 
-    const { error: updateError } = await supabase
-      .from("applications")
-      .update({
-        status: "rejected",
-        reviewed_by: user?.id || null,
-        review_note: rejectNote.trim() || null,
-      })
-      .eq("id", rejectTargetId)
+    const { error: updateError } = await supabase.rpc("review_application", {
+      p_application_id: rejectTargetId,
+      p_decision: "rejected",
+      p_note: rejectNote.trim() || null,
+    })
 
     if (updateError) {
       toast.add({
@@ -279,24 +239,6 @@ export default function ApplicationsPage() {
     }
 
     const targetApp = applications.find((a) => a.id === rejectTargetId)
-
-    // Create notification for the applicant
-    if (targetApp) {
-      console.log("正在创建通知给用户:", targetApp.user_id)
-      const deptName = deptNameMap[targetApp.department_id] || ""
-      const reasonText = rejectNote.trim() ? `原因：${rejectNote.trim()}` : ""
-      const { error: notifError } = await supabase.from("notifications").insert({
-        user_id: targetApp.user_id,
-        title: "入部申请未通过",
-        content: `很遗憾，你的入部申请${deptName ? `（${deptName}）` : ""}未通过审核。${reasonText}`,
-        type: "application",
-        related_id: rejectTargetId,
-        is_read: false,
-      })
-      if (notifError) {
-        console.error("创建通知失败:", notifError)
-      }
-    }
 
     toast.add({
       type: "success",
@@ -319,7 +261,7 @@ export default function ApplicationsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">入部审核</h1>
+        <h1 className="text-2xl font-bold">入部审核</h1>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">状态筛选：</span>
           <Select value={filterStatus} onValueChange={(value) => setFilterStatus(value ?? "all")}>
@@ -399,7 +341,7 @@ export default function ApplicationsPage() {
                       <div className="flex gap-2">
                         <Button
                           size="sm"
-                          onClick={() => handleApprove(app.id, app)}
+                      onClick={() => handleApprove(app.id)}
                           disabled={actionLoading}
                         >
                           通过

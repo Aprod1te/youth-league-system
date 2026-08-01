@@ -47,7 +47,7 @@ export function PageHeader({
       )}
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-medium text-foreground tracking-tight">
+          <h1 className="text-2xl font-medium text-foreground">
             {title}
           </h1>
           {description && (
