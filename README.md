@@ -17,7 +17,7 @@
 
 - Node.js 20.9 或更高版本，推荐 Node.js 22 LTS
 - npm
-- Docker Desktop（运行本地 Supabase 和 `db reset` 时需要）
+- Docker 兼容容器环境（Docker Desktop 或 Colima，用于本地 Supabase 和 `db reset`）
 - Supabase CLI（项目通过 `npx supabase` 调用）
 
 ## 本地启动
@@ -35,12 +35,19 @@
    npx supabase start
    ```
 
+   Colima 使用 `virtiofs` 时，如果 `vector` 挂载 Docker socket 报
+   `operation not supported`，改用 `npx supabase start -x vector`。这只关闭
+   本地日志采集，不影响 Auth、数据库、REST、Storage、Realtime 或权限测试。
+   如果 `db reset` 重新创建 Storage 容器后暂时出现 502，先执行
+   `npx supabase stop`，再执行 `npx supabase start -x vector` 刷新本地网关；
+   默认 stop 会保留数据库卷。
+
 3. 将 `npx supabase status` 输出的 API URL、anon key 和 service role key 填入 `.env.local`。service role key 只供维护脚本使用，绝不能暴露给浏览器。
 
 4. 从零执行全部迁移和幂等部门种子：
 
    ```bash
-   npx supabase db reset
+   npx supabase db reset --local
    ```
 
 5. 启动应用：
@@ -71,10 +78,17 @@
 npm run typecheck
 npm run lint
 npm test
+npm run test:integration
 npm run build
 ```
 
 `npm run check` 会依次运行类型检查、lint 和单元测试。GitHub Actions 对每次 push 和 pull request 执行 `npm ci`、`npm run check` 与生产构建。
+
+`npm run test:integration` 需要已启动的本地 Supabase。测试从本地 CLI 读取临时
+API key，且会同时拒绝 API URL 或数据库 URL 不是 `localhost`、`127.0.0.1`
+或 `::1` 的环境；它不会读取或覆盖 `.env.local`。测试会创建并清理管理员、书记、
+部长、成员和申请人五类临时账号，覆盖活动审批、任务审批、报名、签到、名单隐私、
+越权 RPC 和私有 Storage。
 
 ## 数据库迁移
 
@@ -83,16 +97,17 @@ npm run build
 - `000_baseline_schema.sql`：可幂等重建十张业务表、索引、触发器和认证 profile trigger。
 - `001` 至 `010`：项目历史迁移和签到兼容迁移。
 - `011_production_security_and_workflows.sql`：严格 RLS、私有 buckets、权限收敛及原子业务 RPC。
+- `012_restore_service_role_maintenance_access.sql`：恢复仅限 service role 的维护 DML 权限，不放宽普通用户 RLS。
 
 ### 本地数据库
 
 `db reset` 会删除本地数据，然后按文件名顺序执行全部迁移和 `supabase/seed_departments.sql`：
 
 ```bash
-npx supabase db reset
+npx supabase db reset --local
 ```
 
-该命令只应指向本地 Supabase。它需要 Docker Desktop。
+该命令只应指向本地 Supabase。它需要 Docker Desktop 或 Colima。
 
 ### 新建远端项目
 
@@ -157,7 +172,7 @@ where id in (
 https://example.com/auth/callback**
 ```
 
-2. 在 **Authentication > Providers > Email** 关闭用户自行注册。保持公开 signup 关闭，由管理员从 **Authentication > Users > Invite user** 逐个邀请。
+2. 保持 Email 登录提供商开启，但关闭项目级用户自行注册，由管理员从 **Authentication > Users > Invite user** 逐个邀请。不要关闭整个 Email 提供商，否则已受邀账号也无法登录。
 3. 在密码安全设置中把最小长度设为 10 位。新邀请和重置密码都执行 10 位限制；登录页仍允许提交历史 6 位密码，避免阻断已有账号。
 4. 配置可向学生邮箱投递的 SMTP 和发件人。Supabase 默认发信服务有严格的收件人与频率限制，不适合批量邀请学生；可以使用学校 SMTP 或符合学校要求且有免费额度的邮件服务，但必须先测试送达率和垃圾邮件拦截。
 5. 在 **Authentication > Email Templates > Invite user** 使用包含一次性 token hash 的链接：
